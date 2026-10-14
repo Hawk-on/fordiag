@@ -7,6 +7,10 @@ i tillatslista i `src/command.rs`. Sletting av feilkodar, skriving, rutinar,
 reset, sesjonsbyte, security access og liknande kan ikkje uttrykkjast i koden.
 Slikt gjer du i FORScan.
 
+**Dokumentasjon:**
+* [`docs/MANUAL.md`](docs/MANUAL.md): full brukarmanual (alle kommandoar, tolking, feilsøking)
+* [`CLAUDE.md`](CLAUDE.md): rettleiing for utvikling: tryggleiksreglar, konvensjonar, arkitektur og plan
+
 ## Bygg og test
 
 ```sh
@@ -23,7 +27,7 @@ Binæren hamnar i `target/release/fordiag`.
 | `fordiag connect [--bus hs\|ms] [--probe]` | Init (`ATZ ATE0 ATL0 ATS1 ATH1 ATSP6`), viser `ATI`, `ATDP` og `ATRV`. `--probe` sender òg OBD `01 00`. |
 | `fordiag battery --rest [--seconds 10]` | Kvilespenning (median av målingar kvart 0,5 s) |
 | `fordiag battery --crank [--seconds 15]` | Lågaste spenning medan du startar motoren |
-| `fordiag battery --charging [--minutes 3]` | Ladespenning: min/maks/snitt og trend |
+| `fordiag battery --charging [--minutes 3 \| --seconds N]` | Ladespenning: min/maks/snitt og trend |
 | `fordiag battery --summary` | Samla vurdering av dei siste lagra testane |
 | `fordiag check "<kommando>"` | Sjekkar ein kommando mot tillatslista **utan** å sende han |
 
@@ -32,6 +36,20 @@ simulator), `--data-dir fordiag-data`, `-y/--yes` (ikkje vent på Enter).
 
 Batteritestane sender berre `ATZ`, `ATE0`, `ATL0` og `ATRV`. Ingen av dei går
 ut på CAN-bussen, så bilen blir ikkje vekt av målinga.
+
+## Rask start
+
+```sh
+fordiag --mock connect --probe          # prøv utan bil
+fordiag connect --probe                 # kabel i, brytar på HS, tenning på
+fordiag battery --rest                  # bilen har stått i fleire timar
+fordiag battery --crank                 # start motoren når «START NO» kjem
+fordiag battery --charging              # motoren på tomgang i 3 min
+fordiag battery --summary
+```
+
+Sjå [manualen](docs/MANUAL.md) for kva du skal gjere fysisk før kvar test, og korleis
+resultata skal tolkast.
 
 ## Filer
 
