@@ -1,12 +1,12 @@
-//! Transportlaget: korleis kommandoar kjem fram til ELM327 og svar kjem tilbake.
+//! The transport layer: how commands reach the ELM327 and responses come back.
 //!
-//! [`Transport`]-traiten tek berre imot `&Command` frå tillatslista. Det finst
-//! ingen metode for å sende rå tekst. Tre implementasjonar:
+//! The [`Transport`] trait only accepts `&Command` from the allowlist. There is
+//! no method for sending raw text. Three implementations:
 //!
-//! * [`SerialTransport`] – ekte kabel (`/dev/ttyUSB0`) eller ein pseudoterminal
-//!   frå ein ELM327-emulator.
-//! * [`MockTransport`] – innspelte svar, for `cargo test` og `--mock`.
-//! * [`Logged`] – pakkar inn ein annan transport og loggar alt til fil.
+//! * [`SerialTransport`] – a real cable (`/dev/ttyUSB0`) or a pseudo-terminal
+//!   from an ELM327 emulator.
+//! * [`MockTransport`] – recorded responses, for `cargo test` and `--mock`.
+//! * [`Logged`] – wraps another transport and logs everything to a file.
 
 use crate::command::{Command, checked_wire};
 use anyhow::{Context, Result, bail};
@@ -19,25 +19,25 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-/// Feil frå transportlaget som kallaren kan ville skilje ut.
+/// Transport-layer errors the caller may want to tell apart.
 #[derive(Debug, thiserror::Error)]
 pub enum TransportError {
-    /// Fekk ikkje `>`-prompten innan tida. `partial` er det som kom.
-    #[error("tidsavbrot: fekk ikkje svar frå ELM327 (motteke så langt: {partial:?})")]
+    /// The `>` prompt did not arrive in time. `partial` is what did arrive.
+    #[error("timeout: no response from the ELM327 (received so far: {partial:?})")]
     Timeout { partial: String },
 }
 
 pub trait Transport {
-    /// Send éin tillaten kommando og returner rått svar fram til (men utan)
-    /// `>`-prompten.
+    /// Send one allowed command and return the raw response up to (but not
+    /// including) the `>` prompt.
     fn exchange(&mut self, cmd: &Command, timeout: Duration) -> Result<String>;
 
-    /// Kort skildring, t.d. «/dev/ttyUSB0 @ 38400» eller «mock».
+    /// Short description, e.g. "/dev/ttyUSB0 @ 38400" or "mock".
     fn describe(&self) -> String;
 }
 
 // ---------------------------------------------------------------------------
-// Seriell transport
+// Serial transport
 // ---------------------------------------------------------------------------
 
 pub struct SerialTransport {
@@ -51,7 +51,7 @@ impl SerialTransport {
         let port = serialport::new(path, baud)
             .timeout(Duration::from_millis(50))
             .open()
-            .with_context(|| format!("klarte ikkje opne {path} (er kabelen i, og er FORScan lukka?)"))?;
+            .with_context(|| format!("could not open {path} (is the cable plugged in, and is FORScan closed?)"))?;
         Ok(SerialTransport {
             port,
             path: path.to_string(),
@@ -64,11 +64,11 @@ impl Transport for SerialTransport {
     fn exchange(&mut self, cmd: &Command, timeout: Duration) -> Result<String> {
         let wire = checked_wire(cmd)?;
 
-        // Kast eventuelle gamle bytes som ligg i innbufferen.
+        // Discard any stale bytes in the input buffer.
         let _ = self.port.clear(serialport::ClearBuffer::Input);
 
-        // NB: Vi sender aldri ein tom linje. Ein tom CR får ELM327 til å
-        // gjenta *førre* kommando – som kunne vore noko FORScan sende.
+        // NB: We never send an empty line. A bare CR makes the ELM327 repeat
+        // the *previous* command – which could have been something FORScan sent.
         self.port.write_all(format!("{wire}\r").as_bytes())?;
         self.port.flush()?;
 
@@ -90,7 +90,7 @@ impl Transport for SerialTransport {
                 return Err(TransportError::Timeout { partial }.into());
             }
         }
-        // Somme klonar sender NUL-bytes; fjern dei.
+        // Some clones send NUL bytes; strip them.
         buf.retain(|&b| b != 0);
         Ok(String::from_utf8_lossy(&buf).into_owned())
     }
@@ -101,15 +101,15 @@ impl Transport for SerialTransport {
 }
 
 // ---------------------------------------------------------------------------
-// Mock-transport
+// Mock transport
 // ---------------------------------------------------------------------------
 
-/// Funksjon som gjev spenning (V) som funksjon av tid sidan start.
+/// Function giving voltage (V) as a function of time since start.
 pub type VoltageFn = Box<dyn FnMut(Duration) -> f32>;
 
-/// Innspelt ELM327. Svar blir slått opp på kommandoteksten (t.d. `"ATRV"`).
-/// Har ein kommando fleire svar i kø, blir dei brukte i tur; det siste blir
-/// verande og gjentatt. Ukjende kommandoar gjev `?`, slik ein ekte ELM gjer.
+/// Recorded ELM327. Responses are looked up by command text (e.g. `"ATRV"`).
+/// If a command has several queued responses they are used in turn; the last
+/// one stays and is repeated. Unknown commands return `?`, as a real ELM does.
 pub struct MockTransport {
     responses: HashMap<String, VecDeque<String>>,
     voltage: Option<VoltageFn>,
@@ -125,7 +125,7 @@ impl Default for MockTransport {
 }
 
 impl MockTransport {
-    /// Tom mock: alt gjev `?`.
+    /// Empty mock: everything returns `?`.
     pub fn new() -> Self {
         MockTransport {
             responses: HashMap::new(),
@@ -136,7 +136,7 @@ impl MockTransport {
         }
     }
 
-    /// Mock med vanlege svar på init-kommandoane, slik ein ELM327 v1.5 svarar.
+    /// Mock with the usual responses to the init commands, as an ELM327 v1.5 replies.
     pub fn elm_defaults() -> Self {
         let mut m = Self::new()
             .on("ATZ", "\r\rELM327 v1.5\r\r")
@@ -150,7 +150,7 @@ impl MockTransport {
         m.on("ATDP", "ISO 15765-4 (CAN 11/500)\r\r")
     }
 
-    /// Legg til eit svar i køen for `wire`.
+    /// Add a response to the queue for `wire`.
     pub fn on(mut self, wire: &str, response: &str) -> Self {
         self.responses
             .entry(wire.to_string())
@@ -159,28 +159,28 @@ impl MockTransport {
         self
     }
 
-    /// Erstatt alle svar for `wire` med eitt.
-    #[allow(dead_code)] // brukt i testar
+    /// Replace all responses for `wire` with one.
+    #[allow(dead_code)] // used in tests
     pub fn set(mut self, wire: &str, response: &str) -> Self {
         self.responses
             .insert(wire.to_string(), VecDeque::from([response.to_string()]));
         self
     }
 
-    /// La `ATRV` svare med ein funksjon av tida (for å simulere start o.l.).
+    /// Let `ATRV` respond with a function of time (to simulate cranking etc.).
     pub fn with_voltage(mut self, f: VoltageFn) -> Self {
         self.voltage = Some(f);
         self
     }
 
-    /// Simuler at kvar kommando tek litt tid, som på ein ekte kabel.
+    /// Simulate that each command takes some time, as on a real cable.
     pub fn with_latency(mut self, latency: Duration) -> Self {
         self.latency = latency;
         self
     }
 
-    /// Handtak til lista over alt som er sendt (for testar).
-    #[allow(dead_code)] // brukt i testar
+    /// Handle to the list of everything sent (for tests).
+    #[allow(dead_code)] // used in tests
     pub fn sent_handle(&self) -> Rc<RefCell<Vec<String>>> {
         Rc::clone(&self.sent)
     }
@@ -197,7 +197,7 @@ impl Transport for MockTransport {
         if wire == "ATRV" {
             if let Some(f) = self.voltage.as_mut() {
                 let v = f(self.start.elapsed());
-                // Ekte ELM327 svarar med éin desimal.
+                // A real ELM327 replies with one decimal.
                 return Ok(format!("{v:.1}V\r\r"));
             }
         }
@@ -214,25 +214,25 @@ impl Transport for MockTransport {
     }
 
     fn describe(&self) -> String {
-        "mock (ingen bil)".to_string()
+        "mock (no car)".to_string()
     }
 }
 
 // ---------------------------------------------------------------------------
-// Rålogg
+// Raw log
 // ---------------------------------------------------------------------------
 
 #[derive(Serialize)]
 struct LogEntry<'a> {
-    /// Tidsstempel, lokal tid med millisekund.
+    /// Timestamp, local time with milliseconds.
     ts: String,
-    /// "tx" (sendt), "rx" (motteke), "err" (feil) eller "info".
+    /// "tx" (sent), "rx" (received), "err" (error) or "info".
     dir: &'a str,
     data: &'a str,
 }
 
-/// Loggfil i JSON Lines-format: éi linje per hending. Kvar linje blir skriven
-/// og flusha med ein gong, så loggen overlever om programmet krasjar.
+/// Log file in JSON Lines format: one line per event. Each line is written and
+/// flushed immediately, so the log survives if the program crashes.
 #[derive(Clone)]
 pub struct RawLog {
     file: Rc<RefCell<File>>,
@@ -240,9 +240,9 @@ pub struct RawLog {
 }
 
 impl RawLog {
-    /// Lag ny loggfil `<dir>/raw-ÅÅÅÅMMDD-TTMMSS.jsonl`.
+    /// Create a new log file `<dir>/raw-YYYYMMDD-HHMMSS.jsonl`.
     pub fn create(dir: &Path) -> Result<Self> {
-        std::fs::create_dir_all(dir).with_context(|| format!("klarte ikkje lage {}", dir.display()))?;
+        std::fs::create_dir_all(dir).with_context(|| format!("could not create {}", dir.display()))?;
         let name = format!("raw-{}.jsonl", chrono::Local::now().format("%Y%m%d-%H%M%S"));
         let path = dir.join(name);
         let file = OpenOptions::new().create(true).append(true).open(&path)?;
@@ -264,14 +264,14 @@ impl RawLog {
         };
         if let Ok(line) = serde_json::to_string(&entry) {
             let mut f = self.file.borrow_mut();
-            // Loggfeil skal ikkje stoppe målinga; vi prøver vårt beste.
+            // Logging errors must not stop a measurement; best effort.
             let _ = writeln!(f, "{line}");
             let _ = f.flush();
         }
     }
 }
 
-/// Transport som loggar alt som går gjennom ein annan transport.
+/// Transport that logs everything passing through another transport.
 pub struct Logged {
     inner: Box<dyn Transport>,
     log: RawLog,
@@ -286,12 +286,12 @@ impl Logged {
 
 impl Transport for Logged {
     fn exchange(&mut self, cmd: &Command, timeout: Duration) -> Result<String> {
-        // Logg berre det som faktisk kan sendast; avviste kommandoar blir
-        // logga som feil.
+        // Only log what can actually be sent; rejected commands are logged
+        // as errors.
         match checked_wire(cmd) {
             Ok(wire) => self.log.write("tx", &wire),
             Err(e) => {
-                self.log.write("err", &format!("avvist: {e}"));
+                self.log.write("err", &format!("rejected: {e}"));
                 bail!(e);
             }
         }
@@ -318,7 +318,7 @@ mod tests {
     use crate::command::AtCommand;
 
     #[test]
-    fn mock_koar_og_gjentek_siste_svar() {
+    fn mock_queues_and_repeats_last_response() {
         let mut m = MockTransport::new().on("ATI", "A").on("ATI", "B");
         let cmd = Command::At(AtCommand::Identify);
         let t = Duration::from_secs(1);
@@ -330,7 +330,7 @@ mod tests {
     }
 
     #[test]
-    fn logg_skriv_tx_og_rx() {
+    fn log_writes_tx_and_rx() {
         let dir = std::env::temp_dir().join(format!("fordiag-test-{}", std::process::id()));
         let log = RawLog::create(&dir).unwrap();
         let mut t = Logged::new(Box::new(MockTransport::elm_defaults()), log.clone());

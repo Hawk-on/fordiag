@@ -1,53 +1,53 @@
-//! Tillatsliste for alt som kan sendast til ELM327-brikka og til bilen.
+//! Allowlist for everything that can be sent to the ELM327 chip and the car.
 //!
-//! Tryggleiksprinsippet er at **forbodne kommandoar ikkje kan konstruerast**:
+//! The safety principle is that **forbidden commands cannot be constructed**:
 //!
-//! * Alt som går ut på kabelen er ein [`Command`]. Han er anten ein
-//!   [`AtCommand`] (til sjølve ELM327-brikka) eller ein [`DiagRequest`]
-//!   (diagnoseførespurnad til ein modul i bilen).
-//! * Begge er `enum`-ar der kvar variant er ei lovleg leseoperasjon. Det finst
-//!   ingen variant for «rå bytes», så t.d. `04` (slett feilkodar) eller UDS
-//!   `2E` (skriv) kan ikkje uttrykkjast i det heile.
-//! * Treng vi å skrive ein kommando som tekst (feilsøking), går han gjennom
-//!   [`Command::parse`], som tolkar teksten til ein av variantane over –
-//!   eller returnerer [`Forbidden`] for alt anna.
-//! * CAN-ID-ar er ein newtype ([`CanId`]) med privat felt, så dei må gå
-//!   gjennom ein validerande konstruktør.
+//! * Everything that goes out on the cable is a [`Command`]. It is either an
+//!   [`AtCommand`] (to the ELM327 chip itself) or a [`DiagRequest`]
+//!   (a diagnostic request to a module in the car).
+//! * Both are `enum`s where every variant is a legitimate read operation.
+//!   There is no "raw bytes" variant, so e.g. `04` (clear DTCs) or UDS `2E`
+//!   (write) cannot be expressed at all.
+//! * If we need to write a command as text (debugging), it goes through
+//!   [`Command::parse`], which maps the text to one of the variants above –
+//!   or returns [`Forbidden`] for anything else.
+//! * CAN IDs are a newtype ([`CanId`]) with a private field, so they must go
+//!   through a validating constructor.
 //!
-//! Transportlaget (`transport.rs`) tek berre imot `&Command`, og sjekkar i
-//! tillegg at teksten som faktisk blir sendt tolkar tilbake til same kommando.
+//! The transport layer (`transport.rs`) only accepts `&Command`, and also
+//! checks that the text actually sent parses back to the same command.
 
 use std::fmt;
 use thiserror::Error;
 
-/// Grunnen til at ein kommando vart avvist.
+/// The reason a command was rejected.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum Forbidden {
-    #[error("tom kommando")]
+    #[error("empty command")]
     Empty,
-    #[error("ugyldig hex: «{0}»")]
+    #[error("invalid hex: \"{0}\"")]
     BadHex(String),
-    #[error("teneste 0x{0:02X} er FORBODEN ({1}) – bruk FORScan om dette verkeleg trengst")]
+    #[error("service 0x{0:02X} is FORBIDDEN ({1}) – use FORScan if you really need this")]
     ForbiddenService(u8, &'static str),
-    #[error("teneste 0x{0:02X} står ikkje på tillatslista")]
+    #[error("service 0x{0:02X} is not on the allowlist")]
     NotAllowed(u8),
-    #[error("feil format for teneste 0x{service:02X}: {reason}")]
+    #[error("invalid format for service 0x{service:02X}: {reason}")]
     BadFormat { service: u8, reason: &'static str },
-    #[error("AT-kommandoen «{0}» står ikkje på tillatslista")]
+    #[error("AT command \"{0}\" is not on the allowlist")]
     AtNotAllowed(String),
-    #[error("CAN-ID 0x{0:X} er utanfor diagnoseområdet 0x700–0x7FF")]
+    #[error("CAN ID 0x{0:X} is outside the diagnostic range 0x700–0x7FF")]
     CanIdOutOfRange(u16),
 }
 
 // ---------------------------------------------------------------------------
-// CAN-ID
+// CAN ID
 // ---------------------------------------------------------------------------
 
-/// Ein 11-bits CAN-ID i diagnoseområdet 0x700–0x7FF.
+/// An 11-bit CAN ID in the diagnostic range 0x700–0x7FF.
 ///
-/// Vi avgrensar til dette området så verktøyet ikkje kan brukast til å sende
-/// meldingar på ID-ar som vanlege modular brukar til styring under køyring.
-/// Feltet er privat: einaste vegen inn er [`CanId::new`].
+/// We restrict to this range so the tool cannot be used to send messages on
+/// IDs that ordinary modules use for control while driving.
+/// The field is private: the only way in is [`CanId::new`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct CanId(u16);
 
@@ -60,14 +60,14 @@ impl CanId {
         }
     }
 
-    #[allow(dead_code)] // blir brukt i fase 3 (feilkodar)
+    #[allow(dead_code)] // used in phase 3 (DTCs)
     pub fn value(self) -> u16 {
         self.0
     }
 
-    /// Vanleg svaradresse for fysisk adressering: førespurnad + 8.
-    /// Gjeld ikkje funksjonell adresse 0x7DF, og 0x7F8–0x7FF har inga +8.
-    #[allow(dead_code)] // blir brukt i fase 3 (feilkodar)
+    /// Usual response address for physical addressing: request + 8.
+    /// Does not apply to the functional address 0x7DF, and 0x7F8–0x7FF have no +8.
+    #[allow(dead_code)] // used in phase 3 (DTCs)
     pub fn response_id(self) -> Option<CanId> {
         if self.0 == 0x7DF {
             return None;
@@ -91,17 +91,17 @@ impl fmt::Display for CanId {
 }
 
 // ---------------------------------------------------------------------------
-// AT-kommandoar (til ELM327-brikka)
+// AT commands (to the ELM327 chip)
 // ---------------------------------------------------------------------------
 
-/// Protokollar vi tillet med `ATSP`.
+/// Protocols we allow with `ATSP`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Protocol {
-    /// `ATSP0` – automatisk søk.
+    /// `ATSP0` – automatic search.
     Auto,
     /// `ATSP6` – ISO 15765-4 CAN, 11-bit ID, 500 kbit/s (Ford HS-CAN).
     HsCan500k,
-    /// `ATSPB` – «USER1»-protokollen, sett opp med `ATPB` (brukt for MS-CAN).
+    /// `ATSPB` – the "USER1" protocol, configured with `ATPB` (used for MS-CAN).
     UserB,
 }
 
@@ -115,15 +115,15 @@ impl Protocol {
     }
 }
 
-/// Lovlege oppsett for protokoll B (`ATPB xx yy`).
+/// Allowed configurations for protocol B (`ATPB xx yy`).
 ///
-/// Berre faste, kjende oppsett er tillatne, fordi feil bitrate på ein CAN-buss
-/// kan forstyrre trafikken der.
+/// Only fixed, known configurations are allowed, because the wrong bit rate
+/// on a CAN bus can disturb the traffic on it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProtocolBConfig {
-    /// `ATPB 81 04` – Ford MS-CAN, 125 kbit/s. Ifølgje ELM327-databladet
-    /// (PP 2C/2D): 0x81 = 11-bit ID, fast 8-byte lengd, ISO 15765-4-format;
-    /// 0x04 = 500/4 = 125 kbit/s.
+    /// `ATPB 81 04` – Ford MS-CAN, 125 kbit/s. According to the ELM327 data
+    /// sheet (PP 2C/2D): 0x81 = 11-bit ID, fixed 8-byte length, ISO 15765-4
+    /// format; 0x04 = 500/4 = 125 kbit/s.
     MsCan125k,
 }
 
@@ -135,44 +135,44 @@ impl ProtocolBConfig {
     }
 }
 
-/// Alle AT-kommandoar verktøyet kan sende til ELM327-brikka.
+/// All AT commands the tool can send to the ELM327 chip.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AtCommand {
-    /// `ATZ` – nullstill brikka.
+    /// `ATZ` – reset the chip.
     Reset,
-    /// `ATE0` – slå av ekko.
+    /// `ATE0` – echo off.
     EchoOff,
-    /// `ATL0` – slå av linjeskift etter CR.
+    /// `ATL0` – linefeeds after CR off.
     LinefeedsOff,
-    /// `ATS0`/`ATS1` – mellomrom i svaret av/på.
+    /// `ATS0`/`ATS1` – spaces in responses off/on.
     Spaces(bool),
-    /// `ATH0`/`ATH1` – vis CAN-ID (header) i svaret av/på.
+    /// `ATH0`/`ATH1` – show CAN ID (header) in responses off/on.
     Headers(bool),
-    /// `ATSPx` – vel protokoll.
+    /// `ATSPx` – select protocol.
     SetProtocol(Protocol),
-    /// `ATPB xx yy` – set opp protokoll B.
+    /// `ATPB xx yy` – configure protocol B.
     ProtocolB(ProtocolBConfig),
-    /// `ATSH xxx` – CAN-ID som førespurnader blir sende til.
+    /// `ATSH xxx` – CAN ID that requests are sent to.
     SetHeader(CanId),
-    /// `ATCRA xxx` – berre ta imot svar frå denne CAN-ID-en.
+    /// `ATCRA xxx` – only receive responses from this CAN ID.
     ReceiveFilter(CanId),
-    /// `ATCRA` utan argument – fjern mottaksfilteret.
+    /// `ATCRA` without argument – clear the receive filter.
     ClearReceiveFilter,
-    /// `ATCAF1` – automatisk ISO 15765-formatering på (ELM legg til PCI-byte).
-    /// `ATCAF0` er med vilje ikkje med: då kunne ein sende vilkårlege CAN-rammer.
+    /// `ATCAF1` – automatic ISO 15765 formatting on (ELM adds the PCI byte).
+    /// `ATCAF0` is deliberately left out: it would allow arbitrary CAN frames.
     CanAutoFormatOn,
-    /// `ATST xx` – svartidsavbrot, xx × 4 ms.
+    /// `ATST xx` – response timeout, xx × 4 ms.
     Timeout(u8),
-    /// `ATRV` – les spenninga på OBD-kontakten (pinne 16).
+    /// `ATRV` – read the voltage on the OBD connector (pin 16).
     ReadVoltage,
-    /// `ATI` – versjonsstreng.
+    /// `ATI` – version string.
     Identify,
-    /// `ATDP` – skildring av aktiv protokoll.
+    /// `ATDP` – description of the active protocol.
     DescribeProtocol,
 }
 
 impl AtCommand {
-    /// Teksten som blir send til ELM327 (utan CR).
+    /// The text sent to the ELM327 (without CR).
     pub fn to_wire(&self) -> String {
         match self {
             AtCommand::Reset => "ATZ".into(),
@@ -196,8 +196,8 @@ impl AtCommand {
         }
     }
 
-    /// Tolk ein AT-kommando skriven som tekst. Mellomrom og små/store bokstavar
-    /// spelar inga rolle. Alt som ikkje står på lista blir avvist.
+    /// Parse an AT command written as text. Whitespace and letter case do not
+    /// matter. Anything not on the list is rejected.
     pub fn parse(text: &str) -> Result<Self, Forbidden> {
         let s: String = text
             .chars()
@@ -225,7 +225,7 @@ impl AtCommand {
             "I" => AtCommand::Identify,
             "DP" => AtCommand::DescribeProtocol,
             _ => {
-                // Kommandoar med argument. Merk rekkjefølgja: «CRA» før «CR…» o.l.
+                // Commands with arguments.
                 if let Some(id) = rest.strip_prefix("SH") {
                     AtCommand::SetHeader(CanId::parse(id)?)
                 } else if let Some(id) = rest.strip_prefix("CRA") {
@@ -245,43 +245,43 @@ impl AtCommand {
 }
 
 // ---------------------------------------------------------------------------
-// Diagnoseførespurnader (til modular i bilen)
+// Diagnostic requests (to modules in the car)
 // ---------------------------------------------------------------------------
 
-/// Standard OBD-II lesemodusar.
+/// Standard OBD-II read modes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ObdRequest {
-    /// Modus `01 pp` – live-data for éin PID.
+    /// Mode `01 pp` – live data for one PID.
     CurrentData { pid: u8 },
-    /// Modus `03` – lagra feilkodar.
+    /// Mode `03` – stored DTCs.
     StoredDtcs,
-    /// Modus `07` – ventande feilkodar.
+    /// Mode `07` – pending DTCs.
     PendingDtcs,
-    /// Modus `09 pp` – køyretøyinfo (VIN o.l.).
+    /// Mode `09 pp` – vehicle information (VIN etc.).
     VehicleInfo { pid: u8 },
-    /// Modus `0A` – permanente feilkodar.
+    /// Mode `0A` – permanent DTCs.
     PermanentDtcs,
 }
 
-/// Lovlege underfunksjonar av UDS `19` (ReadDTCInformation). Alle er lesing.
+/// Allowed sub-functions of UDS `19` (ReadDTCInformation). All are reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DtcReport {
-    /// `19 01 mm` – tal på feilkodar som matchar statusmaska.
+    /// `19 01 mm` – number of DTCs matching the status mask.
     NumberByStatusMask(u8),
-    /// `19 02 mm` – feilkodar som matchar statusmaska.
+    /// `19 02 mm` – DTCs matching the status mask.
     ByStatusMask(u8),
-    /// `19 0A` – alle feilkodar modulen støttar.
+    /// `19 0A` – all DTCs the module supports.
     Supported,
 }
 
-/// Lovlege UDS-lesetenester.
+/// Allowed UDS read services.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UdsRequest {
     /// `19 …` – ReadDTCInformation.
     ReadDtcInformation(DtcReport),
-    /// `22 hh ll` – ReadDataByIdentifier, éin DID.
+    /// `22 hh ll` – ReadDataByIdentifier, one DID.
     ReadDataByIdentifier { did: u16 },
-    /// `3E 00` – TesterPresent (med positivt svar).
+    /// `3E 00` – TesterPresent (with positive response).
     TesterPresent,
 }
 
@@ -291,11 +291,11 @@ pub enum DiagRequest {
     Uds(UdsRequest),
 }
 
-/// Tenester som er eksplisitt forbodne, med grunngjeving. Alt som ikkje er på
-/// tillatslista blir avvist uansett; denne lista gjev berre betre feilmeldingar.
+/// Services that are explicitly forbidden, with a reason. Anything not on the
+/// allowlist is rejected anyway; this list only gives better error messages.
 const FORBIDDEN_SERVICES: &[(u8, &str)] = &[
-    (0x04, "OBD: slett feilkodar"),
-    (0x08, "OBD: styr system om bord"),
+    (0x04, "OBD: clear DTCs"),
+    (0x08, "OBD: control on-board system"),
     (0x10, "UDS: DiagnosticSessionControl"),
     (0x11, "UDS: ECUReset"),
     (0x14, "UDS: ClearDiagnosticInformation"),
@@ -313,7 +313,7 @@ const FORBIDDEN_SERVICES: &[(u8, &str)] = &[
 ];
 
 impl DiagRequest {
-    /// Bytane i førespurnaden.
+    /// The bytes of the request.
     pub fn to_bytes(&self) -> Vec<u8> {
         match *self {
             DiagRequest::Obd(o) => match o {
@@ -335,15 +335,15 @@ impl DiagRequest {
         }
     }
 
-    /// Teksten som blir send til ELM327, t.d. `1902FF`.
+    /// The text sent to the ELM327, e.g. `1902FF`.
     pub fn to_wire(&self) -> String {
         self.to_bytes().iter().map(|b| format!("{b:02X}")).collect()
     }
 
-    /// Validerande konstruktør for rå hex, t.d. `"19 02 FF"`.
+    /// Validating constructor for raw hex, e.g. `"19 02 FF"`.
     ///
-    /// Bytane blir tolka til ein av variantane over. Alt anna – forbodne
-    /// tenester, ukjende tenester, feil lengd – gjev `Err`.
+    /// The bytes are mapped to one of the variants above. Anything else –
+    /// forbidden services, unknown services, wrong length – returns `Err`.
     pub fn from_hex(text: &str) -> Result<Self, Forbidden> {
         let bytes = parse_hex_bytes(text)?;
         Self::from_bytes(&bytes)
@@ -360,30 +360,30 @@ impl DiagRequest {
         use DiagRequest::{Obd, Uds};
         let req = match (service, args) {
             (0x01, [pid]) => Obd(ObdRequest::CurrentData { pid: *pid }),
-            (0x01, _) => return Err(bad("venta nøyaktig éin PID")),
+            (0x01, _) => return Err(bad("expected exactly one PID")),
             (0x03, []) => Obd(ObdRequest::StoredDtcs),
             (0x07, []) => Obd(ObdRequest::PendingDtcs),
             (0x0A, []) => Obd(ObdRequest::PermanentDtcs),
-            (0x03 | 0x07 | 0x0A, _) => return Err(bad("denne modusen tek ingen argument")),
+            (0x03 | 0x07 | 0x0A, _) => return Err(bad("this mode takes no arguments")),
             (0x09, [pid]) => Obd(ObdRequest::VehicleInfo { pid: *pid }),
-            (0x09, _) => return Err(bad("venta nøyaktig éin PID")),
+            (0x09, _) => return Err(bad("expected exactly one PID")),
             (0x19, [0x01, mask]) => Uds(UdsRequest::ReadDtcInformation(DtcReport::NumberByStatusMask(*mask))),
             (0x19, [0x02, mask]) => Uds(UdsRequest::ReadDtcInformation(DtcReport::ByStatusMask(*mask))),
             (0x19, [0x0A]) => Uds(UdsRequest::ReadDtcInformation(DtcReport::Supported)),
-            (0x19, _) => return Err(bad("berre underfunksjon 01 mm, 02 mm og 0A er tillatne")),
+            (0x19, _) => return Err(bad("only sub-functions 01 mm, 02 mm and 0A are allowed")),
             (0x22, [hi, lo]) => Uds(UdsRequest::ReadDataByIdentifier {
                 did: u16::from_be_bytes([*hi, *lo]),
             }),
-            (0x22, _) => return Err(bad("venta nøyaktig éin DID (2 byte)")),
+            (0x22, _) => return Err(bad("expected exactly one DID (2 bytes)")),
             (0x3E, [0x00]) => Uds(UdsRequest::TesterPresent),
-            (0x3E, _) => return Err(bad("berre «3E 00» er tillaten")),
+            (0x3E, _) => return Err(bad("only \"3E 00\" is allowed")),
             _ => return Err(Forbidden::NotAllowed(service)),
         };
         Ok(req)
     }
 }
 
-/// Tolk hex-tekst som «19 02 FF» eller «1902ff» til bytes.
+/// Parse hex text such as "19 02 FF" or "1902ff" into bytes.
 fn parse_hex_bytes(text: &str) -> Result<Vec<u8>, Forbidden> {
     let compact: String = text.chars().filter(|c| !c.is_whitespace()).collect();
     if compact.is_empty() {
@@ -399,10 +399,10 @@ fn parse_hex_bytes(text: &str) -> Result<Vec<u8>, Forbidden> {
 }
 
 // ---------------------------------------------------------------------------
-// Samla kommando-type
+// Combined command type
 // ---------------------------------------------------------------------------
 
-/// Alt som kan sendast på kabelen.
+/// Everything that can be sent on the cable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
     At(AtCommand),
@@ -417,8 +417,8 @@ impl Command {
         }
     }
 
-    /// Tolk tekst til ein kommando. Tekst som byrjar med «AT» blir tolka som
-    /// AT-kommando, alt anna som hex-diagnoseførespurnad.
+    /// Parse text into a command. Text starting with "AT" is parsed as an AT
+    /// command, anything else as a hex diagnostic request.
     pub fn parse(text: &str) -> Result<Self, Forbidden> {
         let t = text.trim();
         if t.len() >= 2 && t[..2].eq_ignore_ascii_case("AT") {
@@ -441,8 +441,8 @@ impl From<DiagRequest> for Command {
     }
 }
 
-/// Siste tryggleikssjekk før noko blir skrive til kabelen: teksten må tolke
-/// tilbake til nøyaktig same kommando. Blir kalla av alle transportar.
+/// Last safety check before anything is written to the cable: the text must
+/// parse back to exactly the same command. Called by every transport.
 pub fn checked_wire(cmd: &Command) -> Result<String, Forbidden> {
     let wire = cmd.to_wire();
     match Command::parse(&wire) {
@@ -453,7 +453,7 @@ pub fn checked_wire(cmd: &Command) -> Result<String, Forbidden> {
 }
 
 // ---------------------------------------------------------------------------
-// Testar
+// Tests
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
@@ -465,8 +465,8 @@ mod tests {
     }
 
     #[test]
-    fn forbodne_tenester_blir_avviste() {
-        // Kvar forboden teneste, både åleine og med typiske argument.
+    fn forbidden_services_are_rejected() {
+        // Every forbidden service, both alone and with typical arguments.
         for text in [
             "04",
             "14",
@@ -489,13 +489,13 @@ mod tests {
             "08 01",
             "3D 14 00",
         ] {
-            assert!(is_forbidden(text), "«{text}» skulle vore forboden");
+            assert!(is_forbidden(text), "\"{text}\" should be forbidden");
             assert!(Command::parse(text).is_err());
         }
     }
 
     #[test]
-    fn alle_tenester_utanfor_lista_blir_avviste() {
+    fn all_services_outside_the_list_are_rejected() {
         let allowed = [0x01, 0x03, 0x07, 0x09, 0x0A, 0x19, 0x22, 0x3E];
         for service in 0u8..=255 {
             if allowed.contains(&service) {
@@ -506,14 +506,14 @@ mod tests {
                 bytes.extend(std::iter::repeat_n(0x00, len));
                 assert!(
                     DiagRequest::from_bytes(&bytes).is_err(),
-                    "0x{service:02X} skulle vore avvist"
+                    "0x{service:02X} should be rejected"
                 );
             }
         }
     }
 
     #[test]
-    fn tillatne_leseforespurnader_blir_godtekne() {
+    fn allowed_read_requests_are_accepted() {
         assert_eq!(
             DiagRequest::from_hex("01 00"),
             Ok(DiagRequest::Obd(ObdRequest::CurrentData { pid: 0 }))
@@ -551,7 +551,7 @@ mod tests {
     }
 
     #[test]
-    fn feil_format_blir_avvist() {
+    fn malformed_requests_are_rejected() {
         for text in [
             "",
             "1",
@@ -568,12 +568,12 @@ mod tests {
             "3E 80",
             "3E",
         ] {
-            assert!(DiagRequest::from_hex(text).is_err(), "«{text}» skulle vore avvist");
+            assert!(DiagRequest::from_hex(text).is_err(), "\"{text}\" should be rejected");
         }
     }
 
     #[test]
-    fn at_kommandoar_tillatsliste() {
+    fn at_command_allowlist() {
         assert_eq!(AtCommand::parse("ATZ"), Ok(AtCommand::Reset));
         assert_eq!(
             AtCommand::parse("at sp 6"),
@@ -593,8 +593,8 @@ mod tests {
         );
         assert_eq!(AtCommand::parse("ATST 32"), Ok(AtCommand::Timeout(0x32)));
 
-        // Ikkje på lista: monitorering, rå CAN, endra baudrate, kalibrering,
-        // programmerbare parametrar, andre PB-oppsett, ID-ar utanfor 7xx.
+        // Not on the list: monitoring, raw CAN, baud rate change, calibration,
+        // programmable parameters, other PB configurations, IDs outside 7xx.
         for text in [
             "ATMA",
             "ATCAF0",
@@ -613,12 +613,12 @@ mod tests {
             "ATST1",
             "ZAT",
         ] {
-            assert!(AtCommand::parse(text).is_err(), "«{text}» skulle vore avvist");
+            assert!(AtCommand::parse(text).is_err(), "\"{text}\" should be rejected");
         }
     }
 
     #[test]
-    fn can_id_validering() {
+    fn can_id_validation() {
         assert!(CanId::new(0x6FF).is_err());
         assert!(CanId::new(0x800).is_err());
         assert_eq!(
@@ -630,8 +630,8 @@ mod tests {
     }
 
     #[test]
-    fn alle_kommandoar_overlever_tur_retur() {
-        // Kvar kommando vi kan lage skal gje tekst som tolkar tilbake til seg sjølv.
+    fn all_commands_survive_round_trip() {
+        // Every command we can build must produce text that parses back to itself.
         let id = CanId::new(0x7E0).unwrap();
         let cmds: Vec<Command> = vec![
             AtCommand::Reset.into(),
@@ -665,7 +665,7 @@ mod tests {
             DiagRequest::Uds(UdsRequest::TesterPresent).into(),
         ];
         for c in cmds {
-            let wire = checked_wire(&c).expect("skulle vore godkjend");
+            let wire = checked_wire(&c).expect("should be accepted");
             assert!(!wire.contains('\r') && !wire.contains('\n'));
         }
     }

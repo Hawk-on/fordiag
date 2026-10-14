@@ -1,14 +1,14 @@
-//! Batteritestar basert på `ATRV` (spenninga på OBD-kontakten, pinne 16).
+//! Battery tests based on `ATRV` (the voltage on the OBD connector, pin 16).
 //!
-//! Avgrensingar som gjeld alle testane:
-//! * ELM327 måler med 0,1 V oppløysing, og billege klonar kan bomme med
-//!   0,1–0,2 V. Samanlikn gjerne éin gong med multimeter på batteripolane.
-//! * Spenning seier noko om ladenivå og om batteriet toler startstraum, men
-//!   kan ikkje måle kapasitet (Ah). Ein ekte batteritest krev ein
-//!   belastnings- eller konduktanstestar.
+//! Limitations that apply to all tests:
+//! * The ELM327 measures with 0.1 V resolution, and cheap clones can be off by
+//!   0.1–0.2 V. Compare once with a multimeter on the battery terminals.
+//! * Voltage says something about state of charge and whether the battery can
+//!   handle cranking current, but cannot measure capacity (Ah). A real battery
+//!   test requires a load or conductance tester.
 //!
-//! Analysefunksjonane er reine funksjonar av ei liste [`Sample`], så dei kan
-//! testast utan bil.
+//! The analysis functions are pure functions of a list of [`Sample`]s, so they
+//! can be tested without a car.
 
 use crate::elm::Elm;
 use anyhow::{Result, bail};
@@ -16,30 +16,30 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-/// Éi spenningsmåling.
+/// One voltage measurement.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct Sample {
-    /// Millisekund sidan målinga starta.
+    /// Milliseconds since the measurement started.
     pub t_ms: u64,
     pub volts: f32,
 }
 
-/// Formater spenning med desimalkomma: 12.456 → «12,46 V».
+/// Format a voltage with two decimals: 12.456 → "12.46 V".
 pub fn fmt_v(v: f32) -> String {
-    format!("{v:.2} V").replace('.', ",")
+    format!("{v:.2} V")
 }
 
 // ---------------------------------------------------------------------------
 // Sampling
 // ---------------------------------------------------------------------------
 
-/// Les `ATRV` gjentekne gonger i `duration`.
+/// Read `ATRV` repeatedly for `duration`.
 ///
-/// * `interval = None`: så raskt som mogleg (for starttest).
-/// * `on_sample` blir kalla for kvar måling (for live-utskrift).
+/// * `interval = None`: as fast as possible (for the crank test).
+/// * `on_sample` is called for each measurement (for live output).
 ///
-/// Enkeltfeil (t.d. at ELM-brikka mistar straum eit augneblink under start)
-/// blir tolererte; fem feil på rad avbryt.
+/// Single errors (e.g. the ELM chip briefly losing power during cranking)
+/// are tolerated; five errors in a row abort.
 pub fn sample_voltage(
     elm: &mut Elm,
     duration: Duration,
@@ -64,7 +64,7 @@ pub fn sample_voltage(
             Err(e) => {
                 errors_in_row += 1;
                 if errors_in_row >= 5 {
-                    bail!("for mange feil på rad under måling: {e:#}");
+                    bail!("too many consecutive errors during measurement: {e:#}");
                 }
             }
         }
@@ -75,13 +75,13 @@ pub fn sample_voltage(
         }
     }
     if samples.is_empty() {
-        bail!("fekk ingen spenningsmålingar");
+        bail!("got no voltage measurements");
     }
     Ok(samples)
 }
 
 // ---------------------------------------------------------------------------
-// Statistikk
+// Statistics
 // ---------------------------------------------------------------------------
 
 fn median(values: &[f32]) -> f32 {
@@ -108,7 +108,7 @@ fn min_max(samples: &[Sample]) -> (f32, f32) {
     })
 }
 
-/// Stigningstal (V per minutt) med minste kvadrats metode.
+/// Slope (V per minute) by least squares.
 fn slope_v_per_min(samples: &[Sample]) -> f32 {
     if samples.len() < 2 {
         return 0.0;
@@ -122,34 +122,36 @@ fn slope_v_per_min(samples: &[Sample]) -> f32 {
     if den == 0.0 { 0.0 } else { (num / den) as f32 }
 }
 
-/// Lengste pause mellom to målingar (ms).
+/// Longest gap between two measurements (ms).
 fn max_gap_ms(samples: &[Sample]) -> u64 {
     samples.windows(2).map(|w| w[1].t_ms - w[0].t_ms).max().unwrap_or(0)
 }
 
 // ---------------------------------------------------------------------------
-// Kvilespenning
+// Resting voltage
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RestVerdict {
-    /// ≥ 12,6 V
+    /// ≥ 12.6 V
     Full,
-    /// 12,4–12,5 V
+    /// 12.4–12.5 V
     Ok,
-    /// < 12,4 V
+    /// < 12.4 V
     Low,
-    /// Over 13 V: motoren går eller ladar er tilkopla – ikkje kvilespenning.
+    /// Above 13 V: engine running or charger connected – not a resting voltage.
     NotResting,
 }
 
 impl RestVerdict {
     pub fn text(self) -> &'static str {
         match self {
-            RestVerdict::Full => "Fullt og friskt (≥ 12,6 V)",
-            RestVerdict::Ok => "Greitt, men ikkje heilt fullt (12,4–12,5 V)",
-            RestVerdict::Low => "Utlada eller svekka batteri (< 12,4 V)",
-            RestVerdict::NotResting => "Ugyldig måling: over 13 V, så motoren går eller ein ladar er kopla til",
+            RestVerdict::Full => "Fully charged and healthy (≥ 12.6 V)",
+            RestVerdict::Ok => "OK, but not fully charged (12.4–12.5 V)",
+            RestVerdict::Low => "Discharged or weakened battery (< 12.4 V)",
+            RestVerdict::NotResting => {
+                "Invalid measurement: above 13 V, so the engine is running or a charger is connected"
+            }
         }
     }
 }
@@ -167,8 +169,8 @@ pub fn analyse_rest(samples: &[Sample]) -> RestResult {
     let volts: Vec<f32> = samples.iter().map(|s| s.volts).collect();
     let med = median(&volts);
     let (min, max) = min_max(samples);
-    // Samanlikn med litt slakk, fordi ELM-en rundar til 0,1 V og medianen
-    // kan hamne midt mellom (t.d. 12,55).
+    // Compare with a little slack, because the ELM rounds to 0.1 V and the
+    // median can land in between (e.g. 12.55).
     let verdict = if med > 13.0 {
         RestVerdict::NotResting
     } else if med >= 12.6 - 0.001 {
@@ -181,12 +183,12 @@ pub fn analyse_rest(samples: &[Sample]) -> RestResult {
     let mut warnings = Vec::new();
     if max > 13.0 {
         warnings.push(
-            "Spenninga var over 13 V: motoren går eller ein ladar er kopla til. Dette er ikkje kvilespenning.".into(),
+            "The voltage was above 13 V: the engine is running or a charger is connected. This is not a resting voltage.".into(),
         );
     }
     if max - min > 0.3 {
         warnings.push(format!(
-            "Spenninga varierte {} under målinga – noko i bilen trekte straum. Vent til bilen har sovna (10–30 min med dørene lukka) og mål på nytt.",
+            "The voltage varied by {} during the measurement – something in the car was drawing current. Wait until the car has gone to sleep (10–30 min with the doors closed) and measure again.",
             fmt_v(max - min)
         ));
     }
@@ -200,44 +202,46 @@ pub fn analyse_rest(samples: &[Sample]) -> RestResult {
 }
 
 // ---------------------------------------------------------------------------
-// Starttest
+// Crank test
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CrankVerdict {
-    /// Lågaste ≥ 10,0 V
+    /// Lowest ≥ 10.0 V
     Healthy,
-    /// 9,6–10,0 V
+    /// 9.6–10.0 V
     Borderline,
-    /// < 9,6 V
+    /// < 9.6 V
     Weak,
-    /// Fann ikkje noko tydeleg spenningsfall.
+    /// No clear voltage drop found.
     NoCrankDetected,
 }
 
 impl CrankVerdict {
     pub fn text(self) -> &'static str {
         match self {
-            CrankVerdict::Healthy => "Friskt: spenninga heldt seg på ca. 10 V eller meir under start",
-            CrankVerdict::Borderline => "Grensetilfelle: lågaste spenning var mellom 9,6 og 10 V",
-            CrankVerdict::Weak => "Svakt: spenninga fall tydeleg under 9,6 V under start",
-            CrankVerdict::NoCrankDetected => "Fann ikkje noko startfall – vart motoren starta medan målinga gjekk?",
+            CrankVerdict::Healthy => "Healthy: the voltage stayed at about 10 V or more while cranking",
+            CrankVerdict::Borderline => "Borderline: the lowest voltage was between 9.6 and 10 V",
+            CrankVerdict::Weak => "Weak: the voltage dropped clearly below 9.6 V while cranking",
+            CrankVerdict::NoCrankDetected => {
+                "No cranking dip found – was the engine started while the measurement was running?"
+            }
         }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CrankResult {
-    /// Spenning før start (median av første 1,5 s).
+    /// Voltage before cranking (median of the first 1.5 s).
     pub before: f32,
-    /// Lågaste måling.
+    /// Lowest measurement.
     pub min: f32,
-    /// Når lågaste måling kom (ms).
+    /// When the lowest measurement occurred (ms).
     pub min_t_ms: u64,
-    /// Spenning på slutten (median av siste 2 s).
+    /// Voltage at the end (median of the last 2 s).
     pub after: f32,
     pub engine_running_after: bool,
-    /// Snittid mellom målingar (ms).
+    /// Mean time between measurements (ms).
     pub mean_interval_ms: f32,
     pub verdict: CrankVerdict,
     pub warnings: Vec<String>,
@@ -274,7 +278,7 @@ pub fn analyse_crank(samples: &[Sample]) -> CrankResult {
         f32::NAN
     };
 
-    // Eit startfall er minst 1 V under spenninga før start.
+    // A cranking dip is at least 1 V below the voltage before cranking.
     let crank_detected = before - min_sample.volts >= 1.0;
     let verdict = if !crank_detected {
         CrankVerdict::NoCrankDetected
@@ -289,21 +293,24 @@ pub fn analyse_crank(samples: &[Sample]) -> CrankResult {
     let mut warnings = Vec::new();
     if mean_interval_ms > 100.0 {
         warnings.push(format!(
-            "Målingane kom berre kvar {:.0}. ms; det verkelege botnpunktet kan vere litt lågare enn målt.",
+            "Measurements only arrived every {:.0} ms; the true minimum may be slightly lower than measured.",
             mean_interval_ms
         ));
     }
     if before > 13.0 {
-        warnings.push("Spenninga før start var over 13 V – gjekk motoren alt, eller var ein ladar kopla til?".into());
+        warnings.push(
+            "The voltage before cranking was above 13 V – was the engine already running, or a charger connected?"
+                .into(),
+        );
     }
     let gap = max_gap_ms(samples);
     if gap > 500 {
         warnings.push(format!(
-            "Hol på {gap} ms i målingane – ELM-brikka kan ha mista straumen under start. Botnpunktet kan då vere lågare enn målt."
+            "Gap of {gap} ms in the measurements – the ELM chip may have lost power while cranking. The minimum may then be lower than measured."
         ));
     }
     if crank_detected && !(after >= 13.0) {
-        warnings.push("Spenninga etter start er under 13 V – starta motoren, og ladar generatoren? (Ford-smartlading kan òg halde spenninga nede ei stund.)".into());
+        warnings.push("The voltage after cranking is below 13 V – did the engine start, and is the alternator charging? (Ford smart charging can also keep the voltage low for a while.)".into());
     }
 
     CrankResult {
@@ -319,31 +326,31 @@ pub fn analyse_crank(samples: &[Sample]) -> CrankResult {
 }
 
 // ---------------------------------------------------------------------------
-// Lading
+// Charging
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ChargingVerdict {
-    /// Snitt 13,2–14,8 V og ingen toppar over 15 V.
+    /// Mean 13.2–14.8 V and no peaks above 15 V.
     Normal,
-    /// Aldri over 13,0 V.
+    /// Never above 13.0 V.
     Low,
-    /// Over 15,0 V.
+    /// Above 15.0 V.
     High,
-    /// Anna mønster, sjå tal og trend.
+    /// Other pattern, see numbers and trend.
     Variable,
 }
 
 impl ChargingVerdict {
     pub fn text(self) -> &'static str {
         match self {
-            ChargingVerdict::Normal => "Innanfor vanleg ladeområde",
+            ChargingVerdict::Normal => "Within the normal charging range",
             ChargingVerdict::Low => {
-                "Låg: spenninga var aldri over 13 V. Anten ladar ikkje generatoren, eller smartladinga held igjen. Gjenta med store forbrukarar på (lys, vifte, bakrutevarme)."
+                "Low: the voltage never exceeded 13 V. Either the alternator is not charging, or smart charging is holding back. Repeat with large loads on (lights, blower, rear window heater)."
             }
-            ChargingVerdict::High => "Uvanleg høg: over 15 V. Bør sjekkast.",
+            ChargingVerdict::High => "Unusually high: above 15 V. Should be checked.",
             ChargingVerdict::Variable => {
-                "Varierande. Ford si smartlading veksla truleg mellom lading og kvile; sjå min/maks og trend."
+                "Variable. Ford smart charging probably alternated between charging and resting; see min/max and trend."
             }
         }
     }
@@ -354,9 +361,9 @@ pub struct ChargingResult {
     pub min: f32,
     pub max: f32,
     pub mean: f32,
-    /// V per minutt (positiv = stigande).
+    /// V per minute (positive = rising).
     pub slope_v_per_min: f32,
-    /// Del av tida (0–1) med spenning ≥ 13,2 V.
+    /// Share of the time (0–1) with voltage ≥ 13.2 V.
     pub share_above_13_2: f32,
     pub verdict: ChargingVerdict,
     pub warnings: Vec<String>,
@@ -365,11 +372,11 @@ pub struct ChargingResult {
 impl ChargingResult {
     pub fn trend_text(&self) -> &'static str {
         if self.slope_v_per_min > 0.05 {
-            "stigande"
+            "rising"
         } else if self.slope_v_per_min < -0.05 {
-            "fallande"
+            "falling"
         } else {
-            "stabil"
+            "stable"
         }
     }
 }
@@ -393,11 +400,11 @@ pub fn analyse_charging(samples: &[Sample]) -> ChargingResult {
 
     let mut warnings = Vec::new();
     if samples.last().map(|s| s.t_ms).unwrap_or(0) < 60_000 {
-        warnings.push("Målinga var kortare enn eitt minutt; trenden er usikker.".into());
+        warnings.push("The measurement was shorter than one minute; the trend is uncertain.".into());
     }
     if min < 12.5 {
         warnings.push(format!(
-            "Spenninga var nede i {} med motoren i gang – batteriet leverte straum i staden for å bli lada.",
+            "The voltage dropped to {} with the engine running – the battery was supplying current instead of being charged.",
             fmt_v(min)
         ));
     }
@@ -413,7 +420,7 @@ pub fn analyse_charging(samples: &[Sample]) -> ChargingResult {
 }
 
 // ---------------------------------------------------------------------------
-// Lagring av resultat (brukt av `battery --summary` og seinare `report`)
+// Storing results (used by `battery --summary` and later `report`)
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -437,14 +444,14 @@ impl Analysis {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BatteryTest {
     pub started: chrono::DateTime<chrono::Local>,
-    /// Kva transport som vart brukt (t.d. «mock» eller «/dev/ttyUSB0 @ 38400 baud»).
+    /// Which transport was used (e.g. "mock" or "/dev/ttyUSB0 @ 38400 baud").
     pub source: String,
     pub analysis: Analysis,
     pub samples: Vec<Sample>,
 }
 
 impl BatteryTest {
-    /// Lagre som `<dir>/battery-<modus>-ÅÅÅÅMMDD-TTMMSS.json`.
+    /// Save as `<dir>/battery-<mode>-YYYYMMDD-HHMMSS.json`.
     pub fn save(&self, dir: &Path) -> Result<PathBuf> {
         std::fs::create_dir_all(dir)?;
         let name = format!(
@@ -457,7 +464,7 @@ impl BatteryTest {
         Ok(path)
     }
 
-    /// Finn siste lagra test av kvar type i `dir`.
+    /// Find the latest saved test of each type in `dir`.
     pub fn load_latest(dir: &Path) -> Result<Latest> {
         let mut latest = Latest::default();
         let Ok(entries) = std::fs::read_dir(dir) else {
@@ -471,7 +478,7 @@ impl BatteryTest {
                     .is_some_and(|n| n.starts_with("battery-") && n.ends_with(".json"))
             })
             .collect();
-        // Filnamna inneheld tidsstempel, så sortering gjev kronologisk rekkjefølgje.
+        // File names contain a timestamp, so sorting gives chronological order.
         files.sort();
         for path in files {
             let text = std::fs::read_to_string(&path)?;
@@ -493,7 +500,7 @@ pub struct Latest {
     pub charging: Option<BatteryTest>,
 }
 
-/// Samla vurdering ut frå dei testane vi har. Returnerer linjer med tekst.
+/// Overall assessment based on the tests we have. Returns lines of text.
 pub fn overall_assessment(
     rest: Option<&RestResult>,
     crank: Option<&CrankResult>,
@@ -504,41 +511,41 @@ pub fn overall_assessment(
 
     match (rest.map(|r| r.verdict), crank_v) {
         (Some(RestVerdict::Low), Some(CrankVerdict::Weak | CrankVerdict::Borderline)) => out.push(
-            "Både kvilespenning og starttest er svake. Lad batteriet fullt med smartladaren, la det kvile 12–24 timar og gjenta. \
-             Er resultata like, er batteriet truleg skada (to djupe utladingar kan gje varig skade på eit EFB-batteri) – få det testa med belastningstestar."
+            "Both resting voltage and crank test are weak. Fully charge the battery with the smart charger, let it rest 12–24 hours and repeat. \
+             If the results are the same, the battery is probably damaged (two deep discharges can permanently damage an EFB battery) – have it tested with a load tester."
                 .into(),
         ),
         (Some(RestVerdict::Low), Some(CrankVerdict::Healthy)) => out.push(
-            "Kvilespenninga er låg, men starten er grei. Batteriet er truleg berre utlada. Lad fullt og mål kvilespenning på nytt etter 12–24 timar."
+            "The resting voltage is low, but cranking is fine. The battery is probably just discharged. Charge fully and measure the resting voltage again after 12–24 hours."
                 .into(),
         ),
         (_, Some(CrankVerdict::Weak)) => out.push(
-            "Starttesten er svak sjølv om kvilespenninga ser grei ut. Det tyder på redusert kapasitet eller høg indre motstand. Få batteriet belastningstesta."
+            "The crank test is weak even though the resting voltage looks fine. This suggests reduced capacity or high internal resistance. Have the battery load-tested."
                 .into(),
         ),
         (Some(RestVerdict::Full | RestVerdict::Ok), Some(CrankVerdict::Healthy)) => out.push(
-            "Kvilespenning og starttest ser normale ut. Batteriet verkar friskt ut frå spenninga.".into(),
+            "Resting voltage and crank test look normal. Judging by voltage, the battery appears healthy.".into(),
         ),
         _ => {}
     }
 
     if let Some(c) = charging {
         match c.verdict {
-            ChargingVerdict::Normal => out.push("Ladespenninga ser normal ut.".into()),
+            ChargingVerdict::Normal => out.push("The charging voltage looks normal.".into()),
             ChargingVerdict::Low => out.push(
-                "Ladespenninga er låg. Det kan vere smartlading som held igjen fordi batteriovervakinga (BMS) trur batteriet er fullt/ukjent – eller ein ladefeil. Sjå feilkodar (fase 3).".into(),
+                "The charging voltage is low. It may be smart charging holding back because the battery monitoring system (BMS) thinks the battery is full/unknown – or a charging fault. See DTCs (phase 3).".into(),
             ),
-            ChargingVerdict::High => out.push("Ladespenninga er høg (over 15 V) og bør sjekkast.".into()),
-            ChargingVerdict::Variable => out.push("Ladespenninga varierer, som er vanleg med Ford si smartlading.".into()),
+            ChargingVerdict::High => out.push("The charging voltage is high (above 15 V) and should be checked.".into()),
+            ChargingVerdict::Variable => out.push("The charging voltage varies, which is common with Ford smart charging.".into()),
         }
     }
 
     if out.is_empty() {
-        out.push("For få testar til ei samla vurdering. Køyr `--rest`, `--crank` og `--charging`.".into());
+        out.push("Too few tests for an overall assessment. Run `--rest`, `--crank` and `--charging`.".into());
     }
     out.push(
-        "Merk: Spenningstestar måler ikkje kapasitet. Dei forklarer heller ikkje åleine symptoma på SYNC/12 V-uttak; \
-         feilkodar frå BCM/ACM/APIM (fase 3) vil seie meir om straumsparing."
+        "Note: Voltage tests do not measure capacity. Nor do they alone explain the SYNC/12 V outlet symptoms; \
+         DTCs from BCM/ACM/APIM (phase 3) will tell more about load shedding."
             .into(),
     );
     out
@@ -548,7 +555,7 @@ pub fn overall_assessment(
 mod tests {
     use super::*;
 
-    /// Lag målingar med fast intervall.
+    /// Build measurements with a fixed interval.
     fn series(interval_ms: u64, volts: &[f32]) -> Vec<Sample> {
         volts
             .iter()
@@ -561,7 +568,7 @@ mod tests {
     }
 
     #[test]
-    fn kvile_grenser() {
+    fn rest_thresholds() {
         assert_eq!(
             analyse_rest(&series(500, &[12.6, 12.6, 12.7])).verdict,
             RestVerdict::Full
@@ -569,7 +576,7 @@ mod tests {
         assert_eq!(
             analyse_rest(&series(500, &[12.5, 12.6, 12.5, 12.6])).verdict,
             RestVerdict::Ok
-        ); // median 12,55
+        ); // median 12.55
         assert_eq!(analyse_rest(&series(500, &[12.4, 12.4, 12.5])).verdict, RestVerdict::Ok);
         assert_eq!(
             analyse_rest(&series(500, &[12.3, 12.3, 12.4])).verdict,
@@ -578,21 +585,21 @@ mod tests {
     }
 
     #[test]
-    fn kvile_varslar_om_lading() {
+    fn rest_warns_about_charging() {
         let r = analyse_rest(&series(500, &[14.1, 14.2, 14.1]));
         assert_eq!(r.verdict, RestVerdict::NotResting);
-        assert!(r.warnings.iter().any(|w| w.contains("ikkje kvilespenning")));
+        assert!(r.warnings.iter().any(|w| w.contains("not a resting voltage")));
     }
 
     fn crank_profile(min: f32) -> Vec<Sample> {
-        let mut v = vec![12.4; 40]; // 2 s før start (50 ms intervall)
+        let mut v = vec![12.4; 40]; // 2 s before cranking (50 ms interval)
         v.extend([11.0, min, min + 0.3, min + 0.5, 11.5, 12.5, 13.5]);
-        v.extend(vec![14.3; 60]); // 3 s etter
+        v.extend(vec![14.3; 60]); // 3 s after
         series(50, &v)
     }
 
     #[test]
-    fn start_friskt() {
+    fn crank_healthy() {
         let r = analyse_crank(&crank_profile(10.2));
         assert_eq!(r.verdict, CrankVerdict::Healthy);
         assert!((r.min - 10.2).abs() < 1e-4);
@@ -601,39 +608,39 @@ mod tests {
     }
 
     #[test]
-    fn start_grense_og_svak() {
+    fn crank_borderline_and_weak() {
         assert_eq!(analyse_crank(&crank_profile(9.8)).verdict, CrankVerdict::Borderline);
         assert_eq!(analyse_crank(&crank_profile(9.6)).verdict, CrankVerdict::Borderline);
         assert_eq!(analyse_crank(&crank_profile(9.1)).verdict, CrankVerdict::Weak);
     }
 
     #[test]
-    fn start_ikkje_oppdaga() {
+    fn crank_not_detected() {
         let r = analyse_crank(&series(50, &[12.4; 100]));
         assert_eq!(r.verdict, CrankVerdict::NoCrankDetected);
     }
 
     #[test]
-    fn start_hol_i_maalingane() {
+    fn crank_gap_in_measurements() {
         let mut s = crank_profile(10.5);
         for x in s.iter_mut().skip(42) {
             x.t_ms += 800;
         }
-        assert!(analyse_crank(&s).warnings.iter().any(|w| w.contains("Hol")));
+        assert!(analyse_crank(&s).warnings.iter().any(|w| w.contains("Gap")));
     }
 
     #[test]
-    fn lading_normal_og_trend() {
-        // 3 minutt, kvart sekund, frå 14,4 ned mot 13,9.
+    fn charging_normal_and_trend() {
+        // 3 minutes, every second, from 14.4 down towards 13.9.
         let v: Vec<f32> = (0..180).map(|i| 14.4 - i as f32 * 0.5 / 180.0).collect();
         let r = analyse_charging(&series(1000, &v));
         assert_eq!(r.verdict, ChargingVerdict::Normal);
-        assert_eq!(r.trend_text(), "fallande");
+        assert_eq!(r.trend_text(), "falling");
         assert!(r.slope_v_per_min < -0.1 && r.slope_v_per_min > -0.25);
     }
 
     #[test]
-    fn lading_laag_og_hoeg() {
+    fn charging_low_and_high() {
         assert_eq!(
             analyse_charging(&series(1000, &[12.7; 90])).verdict,
             ChargingVerdict::Low
@@ -645,15 +652,15 @@ mod tests {
     }
 
     #[test]
-    fn samla_vurdering() {
+    fn overall_assessment_text() {
         let rest = analyse_rest(&series(500, &[12.2; 5]));
         let crank = analyse_crank(&crank_profile(10.4));
         let text = overall_assessment(Some(&rest), Some(&crank), None).join("\n");
-        assert!(text.contains("truleg berre utlada"));
+        assert!(text.contains("probably just discharged"));
     }
 
     #[test]
-    fn lagre_og_laste() {
+    fn save_and_load() {
         let dir = std::env::temp_dir().join(format!("fordiag-bat-{}", std::process::id()));
         let s = series(500, &[12.5; 4]);
         let test = BatteryTest {
@@ -669,7 +676,7 @@ mod tests {
     }
 
     #[test]
-    fn desimalkomma() {
-        assert_eq!(fmt_v(12.456), "12,46 V");
+    fn formats_voltage() {
+        assert_eq!(fmt_v(12.456), "12.46 V");
     }
 }

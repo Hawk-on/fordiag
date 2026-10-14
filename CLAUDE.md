@@ -1,114 +1,122 @@
 # CLAUDE.md
 
-Rettleiing for Claude (og andre) som jobbar i dette repoet.
+Guidance for Claude (and other contributors) working in this repository.
 
-## Prosjektet
+## The project
 
-`fordiag` er eit **les-berre** diagnose-CLI i Rust for ein Ford S-Max Mk2 (CJ), reg.
-2016, 2.0 TDCi 150 hk, automat, start/stopp. Det snakkar med bilen via ein ELM327
-USB-kabel (`/dev/ttyUSB0`, HS/MS-brytar).
+`fordiag` is a **read-only** diagnostic CLI in Rust for a Ford S-Max Mk2 (CJ),
+registered 2016, 2.0 TDCi 150 hp, automatic, start/stop. It talks to the car through
+an ELM327 USB cable (`/dev/ttyUSB0`, HS/MS switch).
 
-Hovudmålet er å finne ut om batteriet (EFB, 75 Ah, 730 A) er friskt etter to djupe
-utladingar, og deretter å lese feilkodar. Symptoma etter utladingane var at SYNC 2 og
-radioen (ACM) kom ut av synk, og at 12 V-uttaket kutta kvart 3.–4. sekund.
-Mistanken er at batteriovervakinga (BMS) driv straumsparing (load shed).
+The main goal is to find out whether the battery (EFB, 75 Ah, 730 A) is healthy after
+two deep discharges, and then to read DTCs. The symptoms after the discharges were
+that SYNC 2 and the radio (ACM) got out of sync, and that the 12 V outlet cut out
+every 3–4 seconds. The suspicion is that the battery monitoring system (BMS) is
+driving load shedding.
 
-Alt som **skriv** til bilen gjer eigaren i FORScan (under Wine). FORScan og fordiag
-kan ikkje bruke kabelen samstundes.
+Everything that **writes** to the car is done by the owner in FORScan (under Wine).
+FORScan and fordiag cannot use the cable at the same time.
 
-## Absolutte tryggleiksreglar (må aldri brytast)
+## Absolute safety rules (must never be broken)
 
-1. **Tillatslista i `src/command.rs` er handheva av typesystemet.** Alt som blir sendt,
-   er ein `Command` (`AtCommand` eller `DiagRequest`). Legg aldri til ein variant for
-   rå bytes eller rå tekst, eller ein `Transport`-metode som tek `&str`/`&[u8]`.
-2. **Tillate:** AT til ELM327-brikka (sjå `AtCommand`), OBD `01`, `03`, `07`, `09`, `0A`,
-   og UDS `19` (01/02/0A), `22` (éin DID) og `3E 00`.
-3. **Forbode, uansett:** `04`, `08`, `10`, `11`, `14`, `27`, `28`, `2E`, `2F`, `31`,
-   `34`–`37`, `3D` og `85`. Det same gjeld `ATCAF0`, andre `ATPB`-oppsett enn
-   `81 04`, og `ATSH`/`ATCRA` utanfor 0x700–0x7FF.
-4. Ber brukaren om noko som ikkje står på lista, sjølv i farten: **sei nei og vis til
-   FORScan.** Ikkje utvid lista med skrivande eller sesjonsendrande tenester.
-5. Ny variant på tillatslista krev testar i `command.rs`: tur-retur
-   (`alle_kommandoar_overlever_tur_retur`) og avvisning av feil format.
-6. Send aldri ei tom linje (CR). ELM327 gjentek då førre kommando.
-7. **Ikkje gjett** Ford-spesifikke DID-ar eller moduladresser og presenter dei som
-   fakta. Merk dei som **uverifiserte** til ein modul faktisk har svart.
-8. Forklaringar av feilkodar skal merkast som **forslag som må sjekkast mot
-   Ford-dokumentasjon**. Ikkje dikt opp tydingar av Ford-spesifikke B- og U-kodar.
-9. Ikkje slett feilkodar, og ikkje forsøk nullstilling av BMS.
+1. **The allowlist in `src/command.rs` is enforced by the type system.** Everything
+   sent is a `Command` (`AtCommand` or `DiagRequest`). Never add a variant for raw
+   bytes or raw text, or a `Transport` method that takes `&str`/`&[u8]`.
+2. **Allowed:** AT commands to the ELM327 chip (see `AtCommand`), OBD `01`, `03`,
+   `07`, `09`, `0A`, and UDS `19` (01/02/0A), `22` (one DID) and `3E 00`.
+3. **Forbidden, always:** `04`, `08`, `10`, `11`, `14`, `27`, `28`, `2E`, `2F`, `31`,
+   `34`–`37`, `3D` and `85`. The same goes for `ATCAF0`, any `ATPB` configuration
+   other than `81 04`, and `ATSH`/`ATCRA` outside 0x700–0x7FF.
+4. If the user asks for something not on the list, even in passing: **say no and
+   point to FORScan.** Never extend the list with writing or session-changing
+   services.
+5. A new allowlist variant requires tests in `command.rs`: a round trip
+   (`all_commands_survive_round_trip`) and rejection of malformed input.
+6. Never send an empty line (CR). The ELM327 would repeat the previous command.
+7. **Do not guess** Ford-specific DIDs or module addresses and present them as facts.
+   Mark them as **unverified** until a module has actually responded.
+8. DTC explanations must be marked as **suggestions to be checked against Ford
+   documentation**. Do not invent meanings for Ford-specific B and U codes.
+9. Do not clear DTCs, and do not attempt a BMS reset.
 
-## Uverifiserte kandidatadresser (fase 3)
+## Unverified candidate addresses (phase 3)
 
-| Modul | Førespurnad | Svar (+8) | Buss | Status |
+| Module | Request | Response (+8) | Bus | Status |
 |---|---|---|---|---|
-| PCM | 7E0 | 7E8 | HS | uverifisert |
-| BCM | 726 | 72E | ? | uverifisert |
-| ACM (radio) | 727 | 72F | MS? | uverifisert |
-| APIM (SYNC) | 7D0 | 7D8 | MS? | uverifisert |
-| IPC (instrument) | 720 | 728 | ? | uverifisert |
+| PCM | 7E0 | 7E8 | HS | unverified |
+| BCM | 726 | 72E | ? | unverified |
+| ACM (radio) | 727 | 72F | MS? | unverified |
+| APIM (SYNC) | 7D0 | 7D8 | MS? | unverified |
+| IPC (instrument cluster) | 720 | 728 | ? | unverified |
 
-Oppdater tabellen når ein modul har svart på ekte bil, med dato og kva buss.
+Update the table once a module has responded on the real car, with the date and the
+bus.
 
-## Arbeidsform
+## Way of working
 
-- Små steg. Etter kvart steg: fortel eigaren kva hen skal gjere **fysisk** (tenning
-  på/av, starte motor, slå om HS/MS-brytaren). Hen limer så inn resultatet.
-- Alt skal kunne testast med `cargo test` utan bil (`MockTransport`).
-- Kommunikasjon med eigaren skjer på **nynorsk**.
+- Small steps. After each step, tell the owner what to do **physically** (ignition
+  on/off, start the engine, flip the HS/MS switch). They then paste the result.
+- Everything must be testable with `cargo test` without a car (`MockTransport`).
+- The owner usually writes in Norwegian (Nynorsk). Reply in their language. The
+  code, CLI output and documentation are in English.
 
-## Kodekonvensjonar
+## Code conventions
 
-- **Kommentarar, CLI-hjelp og brukartekst på nynorsk.** Identifikatorar på engelsk.
-- Testnamn er på nynorsk (t.d. `forbodne_tenester_blir_avviste`).
-- Spenningar blir viste med desimalkomma via `battery::fmt_v` («12,46 V»).
-- Synkron I/O, ingen async. Crates: `serialport` (utan standardfunksjonar, så vi
-  ikkje treng libudev), `clap` derive, `anyhow`/`thiserror`, `chrono`,
+- **Comments, CLI help, user-facing text and test names in English.**
+- Voltages are formatted via `battery::fmt_v` ("12.46 V").
+- Disclaimer: `DISCLAIMER` in `main.rs` is shown in `--help`. Keep it in sync with the
+  disclaimer in `README.md` and `docs/MANUAL.md`.
+- Synchronous I/O, no async. Crates: `serialport` (default features off, so no
+  libudev is needed), `clap` derive, `anyhow`/`thiserror`, `chrono`,
   `serde`/`serde_json`.
-- Hald koden enkel og godt kommentert. Eigaren skal kunne lese og forstå han.
-- Analysefunksjonar skal vere reine funksjonar av data (t.d. `&[Sample]`), skilde frå
+- Keep the code simple and well commented. The owner wants to read and understand it.
+- Analysis functions must be pure functions of data (e.g. `&[Sample]`), separate from
   I/O.
+- License: MIT (`LICENSE`). New dependencies must have a compatible license.
 
-## Kommandoar
+## Commands
 
 ```sh
-cargo build                 # bygg
-cargo test                  # alle testar, utan bil
-cargo fmt                   # formatering (rustfmt.toml: max_width = 120)
+cargo build                 # build
+cargo test                  # all tests, no car needed
+cargo fmt                   # formatting (rustfmt.toml: max_width = 120)
 cargo clippy                # lint
 cargo run -- --mock connect --probe
 cargo run -- --mock --data-dir /tmp/fd battery --crank --seconds 8
-cargo run -- check "14 FF FF FF"     # skal gje AVVIST
+cargo run -- check "14 FF FF FF"     # must print REJECTED
 ```
 
-Serielaget kan testast mot `ELM327-emulator` (`pip install ELM327-emulator`,
-`python3 -m elm -s car`, så `--port /dev/pts/N`).
+The serial layer can be tested against `ELM327-emulator` (`pip install
+ELM327-emulator`, `python3 -m elm -s car`, then `--port /dev/pts/N`).
 
-## Arkitektur
+## Architecture
 
-| Fil | Innhald |
+| File | Contents |
 |---|---|
-| `src/command.rs` | Tillatsliste: `AtCommand`, `DiagRequest`, `CanId`, `Command::parse`, `checked_wire` |
-| `src/transport.rs` | `Transport`-trait, `SerialTransport`, `MockTransport`, `RawLog` (JSONL), `Logged` |
-| `src/elm.rs` | `Elm`: init (HS/MS), `ATI`/`ATDP`/`ATRV`, svarreinsking, ELM-feil, baud-autodeteksjon |
-| `src/battery.rs` | Sampling, analyse (rest/crank/charging), lagring, samla vurdering |
-| `src/main.rs` | CLI (clap) og simulator-scenario for `--mock` |
-| `docs/MANUAL.md` | Brukarmanual: hald han oppdatert når CLI-en endrar seg |
+| `src/command.rs` | Allowlist: `AtCommand`, `DiagRequest`, `CanId`, `Command::parse`, `checked_wire` |
+| `src/transport.rs` | `Transport` trait, `SerialTransport`, `MockTransport`, `RawLog` (JSONL), `Logged` |
+| `src/elm.rs` | `Elm`: init (HS/MS), `ATI`/`ATDP`/`ATRV`, response cleaning, ELM errors, baud auto-detection |
+| `src/battery.rs` | Sampling, analysis (rest/crank/charging), persistence, overall assessment |
+| `src/main.rs` | CLI (clap), disclaimer and the `--mock` simulator scenarios |
+| `docs/MANUAL.md` | User manual: keep it up to date when the CLI changes |
 
-Dataflyt: `main` → `Elm` → `Logged` (rålogg) → `SerialTransport`/`MockTransport`.
-Alle transportar kallar `checked_wire()` før dei skriv.
+Data flow: `main` → `Elm` → `Logged` (raw log) → `SerialTransport`/`MockTransport`.
+Every transport calls `checked_wire()` before writing.
 
-Data blir lagra i `fordiag-data/` (git-ignorert): `logs/raw-*.jsonl` og
-`battery-<modus>-*.json`.
+Data is stored in `fordiag-data/` (git-ignored): `logs/raw-*.jsonl` and
+`battery-<mode>-*.json`.
 
-## Status og plan
+## Status and roadmap
 
-- [x] Fase 1: `connect` (38400 → 115200, init, `ATI`/`ATDP`/`ATRV`, `--probe`, `--bus ms`)
-- [x] Fase 2: `battery --rest/--crank/--charging/--summary`
-- [ ] Fase 3: `dtc`. OBD `03`/`07`/`0A` mot PCM, UDS `19 02 FF` per modul med
-  `ATSH`/`ATCRA` (svar = førespurnad + 8), `--bus ms`, dekoding av 3-byte DTC til
-  P/C/B/U og statusbit i klartekst. Multi-frame-svar (ISO-TP) må handterast.
-- [ ] Fase 4: `report`. Markdown med dato, batteritestar, feilkodar per modul og rålogg
-  som vedlegg.
-- [ ] Ikkje testa mot ekte bil enno. Fase 1 og 2 er testa med mock og emulator.
+- [x] Phase 1: `connect` (38400 → 115200, init, `ATI`/`ATDP`/`ATRV`, `--probe`, `--bus ms`)
+- [x] Phase 2: `battery --rest/--crank/--charging/--summary`
+- [ ] Phase 3: `dtc`. OBD `03`/`07`/`0A` against the PCM, UDS `19 02 FF` per module
+  with `ATSH`/`ATCRA` (response = request + 8), `--bus ms`, decoding of 3-byte DTCs
+  to P/C/B/U and status bits in plain text. Multi-frame responses (ISO-TP) must be
+  handled.
+- [ ] Phase 4: `report`. Markdown with date, battery tests, DTCs per module and the
+  raw log as an attachment.
+- [ ] Not tested against the real car yet. Phases 1 and 2 are tested with the mock
+  and the emulator.
 
-Når CLI-en endrar seg, oppdater både `README.md` og `docs/MANUAL.md`.
+When the CLI changes, update both `README.md` and `docs/MANUAL.md`.

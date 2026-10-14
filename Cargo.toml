@@ -2,6 +2,9 @@
 name = "fordiag"
 version = "0.1.0"
 edition = "2024"
+description = "Read-only ELM327 diagnostic CLI for the Ford S-Max Mk2"
+license = "MIT"
+readme = "README.md"
 
 [dependencies]
 anyhow = "1.0.104"

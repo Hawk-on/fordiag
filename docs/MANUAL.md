@@ -1,156 +1,171 @@
-# fordiag – brukarmanual
+# fordiag – user manual
 
-`fordiag` er eit kommandolinjeverktøy som les diagnosedata frå ein Ford S-Max Mk2
-(2016, 2.0 TDCi) via ein ELM327 USB-kabel. Verktøyet **kan berre lese**. Alt som
-skriv til bilen, til dømes sletting av feilkodar eller nullstilling av
-batteriovervakinga (BMS), gjer du i FORScan.
+`fordiag` is a command-line tool that reads diagnostic data from a Ford S-Max Mk2
+(2016, 2.0 TDCi) through an ELM327 USB cable. The tool **can only read**. Anything
+that writes to the car, such as clearing DTCs or resetting the battery monitoring
+system (BMS), is done in FORScan.
 
-Manualen gjeld versjon 0.1 (fase 1 og 2: tilkopling og batteri).
+This manual covers version 0.1 (phases 1 and 2: connection and battery).
+
+> [!WARNING]
+> **Disclaimer: use at your own risk.** fordiag is provided "as is", without
+> warranty of any kind (see [LICENSE](../LICENSE)). You alone are responsible for how
+> you use it and for any consequences, including damage to the vehicle, its battery
+> or electronics, or personal injury.
+>
+> - Never operate the tool while driving.
+> - Verify results with proper tools and official Ford documentation before acting
+>   on them.
+> - fordiag is not affiliated with or endorsed by Ford, FORScan or ELM Electronics.
 
 ---
 
-## Innhald
+## Contents
 
-1. [Før du byrjar](#1-før-du-byrjar)
-2. [Oversikt over kommandoane](#2-oversikt-over-kommandoane)
-3. [Globale flagg](#3-globale-flagg)
+1. [Before you start](#1-before-you-start)
+2. [Command overview](#2-command-overview)
+3. [Global flags](#3-global-flags)
 4. [`fordiag connect`](#4-fordiag-connect)
 5. [`fordiag battery`](#5-fordiag-battery)
 6. [`fordiag check`](#6-fordiag-check)
-7. [Filer verktøyet lagar](#7-filer-verktøyet-lagar)
-8. [Tryggleik og tillatsliste](#8-tryggleik-og-tillatsliste)
-9. [Feilsøking](#9-feilsøking)
-10. [Testing utan bil](#10-testing-utan-bil)
+7. [Files created by the tool](#7-files-created-by-the-tool)
+8. [Safety and the allowlist](#8-safety-and-the-allowlist)
+9. [Troubleshooting](#9-troubleshooting)
+10. [Testing without a car](#10-testing-without-a-car)
 
 ---
 
-## 1. Før du byrjar
+## 1. Before you start
 
-### Krav
+### Requirements
 
-- Linux (testa på Kubuntu) med Rust stable (`rustup`/`cargo`)
-- ELM327 USB-kabel, typisk merkt «Ford OBD2 til USB», helst med HS/MS-brytar
-- At brukaren din er i `dialout`-gruppa, slik at du får opne `/dev/ttyUSB0`:
+- Linux (tested on Kubuntu) with stable Rust (`rustup`/`cargo`)
+- An ELM327 USB cable, typically labelled "Ford OBD2 to USB", preferably with an
+  HS/MS switch
+- Your user in the `dialout` group, so you can open `/dev/ttyUSB0`:
 
   ```sh
-  groups               # skal innehalde «dialout»
-  sudo usermod -aG dialout $USER   # om ikkje; logg ut og inn att etterpå
+  groups               # should include "dialout"
+  sudo usermod -aG dialout $USER   # if not; then log out and back in
   ```
 
-### Bygging
+### Building
 
 ```sh
 cargo build --release
 ```
 
-Binæren hamnar i `target/release/fordiag`. Døma under skriv berre `fordiag`. Du kan
-anten bruke full sti, eller kopiere binæren til ein stad i `PATH`, t.d.
-`cp target/release/fordiag ~/.local/bin/`.
+The binary ends up in `target/release/fordiag`. The examples below just write
+`fordiag`. Either use the full path, or copy the binary somewhere in your `PATH`,
+e.g. `cp target/release/fordiag ~/.local/bin/`.
 
-### Viktig om kabelen
+### About the cable
 
-- **FORScan og fordiag kan ikkje bruke kabelen samstundes.** Lukk FORScan (og Wine)
-  før du køyrer `fordiag`.
-- Brytaren på kabelen avgjer kva buss du er kopla til:
-  - **HS** (500 kbit/s): motorstyring (PCM) og standard OBD-II
-  - **MS** (125 kbit/s): komfortmodular. Mange av desse ligg truleg der, men det er
-    ikkje verifisert for denne bilen.
-- Batteritestane bryr seg ikkje om brytaren, sidan dei berre måler spenning.
-
----
-
-## 2. Oversikt over kommandoane
-
-| Kommando | Formål | Treng bil? |
-|---|---|---|
-| `fordiag connect` | Test tilkopling: versjon, protokoll og spenning | Ja (eller `--mock`) |
-| `fordiag battery --rest` | Kvilespenning | Ja |
-| `fordiag battery --crank` | Lågaste spenning under start | Ja |
-| `fordiag battery --charging` | Ladespenning med motoren i gang | Ja |
-| `fordiag battery --summary` | Samla vurdering av lagra testar | Nei |
-| `fordiag check "<kommando>"` | Sjekk ein kommando mot tillatslista | Nei |
-| `fordiag help [kommando]` | Innebygd hjelp | Nei |
-
-Planlagt seinare: `fordiag dtc` (feilkodar, fase 3) og `fordiag report`
-(Markdown-rapport, fase 4).
+- **FORScan and fordiag cannot use the cable at the same time.** Close FORScan (and
+  Wine) before running `fordiag`.
+- The switch on the cable decides which bus you are connected to:
+  - **HS** (500 kbit/s): engine control (PCM) and standard OBD-II
+  - **MS** (125 kbit/s): comfort modules. Many of them are probably on this bus,
+    but that is not verified for this car.
+- The battery tests do not care about the switch, because they only measure
+  voltage.
 
 ---
 
-## 3. Globale flagg
+## 2. Command overview
 
-Desse flagga kan stå før eller etter kommandonamnet.
-
-| Flagg | Standard | Tyding |
+| Command | Purpose | Needs a car? |
 |---|---|---|
-| `--port <STI>` | `/dev/ttyUSB0` | Seriellport, eller pseudoterminal frå ein emulator (t.d. `/dev/pts/3`) |
-| `--baud <TAL>` | (auto) | Tving baudrate. Utan dette prøver fordiag 38400 og så 115200. |
-| `--mock` | av | Bruk innebygd simulator i staden for kabel og bil |
-| `--data-dir <MAPPE>` | `fordiag-data` | Kvar loggar og resultat blir lagra (relativt til der du står) |
-| `-y`, `--yes` | av | Ikkje vent på Enter før målingar |
-| `-h`, `--help` | | Vis hjelp |
-| `-V`, `--version` | | Vis versjon |
+| `fordiag connect` | Test the connection: version, protocol and voltage | Yes (or `--mock`) |
+| `fordiag battery --rest` | Resting voltage | Yes |
+| `fordiag battery --crank` | Lowest voltage while cranking | Yes |
+| `fordiag battery --charging` | Charging voltage with the engine running | Yes |
+| `fordiag battery --summary` | Overall assessment of saved tests | No |
+| `fordiag check "<command>"` | Check a command against the allowlist | No |
+| `fordiag help [command]` | Built-in help | No |
 
-**Returkode:** `0` når alt gjekk bra, og `1` ved feil. Feilmeldinga blir då skriven til
-stderr, med prefikset `Feil:`.
+Planned: `fordiag dtc` (DTCs, phase 3) and `fordiag report` (Markdown report,
+phase 4).
+
+---
+
+## 3. Global flags
+
+These flags can go before or after the command name.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--port <PATH>` | `/dev/ttyUSB0` | Serial port, or a pseudo-terminal from an emulator (e.g. `/dev/pts/3`) |
+| `--baud <N>` | (auto) | Force a baud rate. Without it, fordiag tries 38400 and then 115200. |
+| `--mock` | off | Use the built-in simulator instead of cable and car |
+| `--data-dir <DIR>` | `fordiag-data` | Where logs and results are stored (relative to the current directory) |
+| `-y`, `--yes` | off | Do not wait for Enter before measurements |
+| `-h`, `--help` | | Show help (includes the disclaimer) |
+| `-V`, `--version` | | Show version |
+
+**Exit code:** `0` when everything went well, `1` on error. The error message is
+then written to stderr, prefixed with `Error:`.
 
 ---
 
 ## 4. `fordiag connect`
 
-Opnar kabelen, køyrer initsekvensen og viser kva ELM327-brikka rapporterer.
+Opens the cable, runs the init sequence and shows what the ELM327 chip reports.
 
 ```
 fordiag connect [--bus hs|ms] [--probe]
 ```
 
-| Flagg | Standard | Tyding |
+| Flag | Default | Meaning |
 |---|---|---|
 | `--bus hs` | ✓ | HS-CAN 500 kbit/s: `ATSP6` |
-| `--bus ms` | | MS-CAN 125 kbit/s: `ATPB 81 04` + `ATSPB`. Ber deg slå om brytaren først. |
-| `--probe` | av | Sender i tillegg OBD `01 00` (støtta PID-ar) for å sjå om motorstyringa svarar |
+| `--bus ms` | | MS-CAN 125 kbit/s: `ATPB 81 04` + `ATSPB`. Asks you to flip the switch first. |
+| `--probe` | off | Also sends OBD `01 00` (supported PIDs) to see if the engine control module responds |
 
-### Kva skjer
+### What happens
 
-1. Opnar porten med 38400 baud og spør `ATI`. Kjem det ikkje noko svar, blir 115200
-   prøvd.
-2. Initsekvens: `ATZ`, `ATE0`, `ATL0`, `ATS1`, `ATH1` og deretter protokoll (`ATSP6`
-   eller `ATPB8104` + `ATSPB`).
-3. Skriv ut `ATI` (versjon), `ATDP` (protokoll) og `ATRV` (spenning).
-4. Med `--probe`: sender `01 00` og viser svaret.
+1. Opens the port at 38400 baud and asks `ATI`. If there is no reply, 115200 is
+   tried.
+2. Init sequence: `ATZ`, `ATE0`, `ATL0`, `ATS1`, `ATH1`, then the protocol (`ATSP6`,
+   or `ATPB8104` + `ATSPB`).
+3. Prints `ATI` (version), `ATDP` (protocol) and `ATRV` (voltage).
+4. With `--probe`: sends `01 00` and shows the response.
 
-Berre steg 4 sender noko ut på CAN-bussen. Dei andre stega snakkar berre med
-ELM327-brikka.
+Only step 4 sends anything out on the CAN bus. The other steps only talk to the
+ELM327 chip.
 
-### Fysisk
+### Physical setup
 
-- Utan `--probe`: kabelen i, tenninga kan vere av.
-- Med `--probe`: **tenninga på** (motoren treng ikkje gå), og brytaren på **HS**.
+- Without `--probe`: cable plugged in, ignition may be off.
+- With `--probe`: **ignition on** (the engine does not need to run), and the switch
+  on **HS**.
 
-### Døme
+### Example
 
 ```
 $ fordiag connect --probe
-Tilkopla: /dev/ttyUSB0 @ 38400 baud
-ELM-versjon: ELM327 v1.5
-Protokoll:   ISO 15765-4 (CAN 11/500)
-Spenning:    12,60 V
+Connected: /dev/ttyUSB0 @ 38400 baud
+ELM version: ELM327 v1.5
+Protocol:    ISO 15765-4 (CAN 11/500)
+Voltage:     12.60 V
 
-Sender OBD «01 00» (støtta PID-ar) …
-Svar:
+Sending OBD "01 00" (supported PIDs) …
+Response:
   7E8 06 41 00 BE 3F A8 13
 
-Rålogg: fordiag-data/logs/raw-20261014-164038.jsonl
+Raw log: fordiag-data/logs/raw-20261014-164038.jsonl
 ```
 
-Svarlinja byrjar med CAN-ID-en til modulen som svarte (`7E8` = svar frå motorstyringa
-på førespurnad til `7E0`). Får du `NO DATA`, svarte ingen modul.
+The response line starts with the CAN ID of the module that responded (`7E8` is the
+reply from the engine control module to a request sent to `7E0`). If you get
+`NO DATA`, no module responded.
 
 ---
 
 ## 5. `fordiag battery`
 
-Batteritestar basert på `ATRV`, altså spenninga ELM327 måler på pinne 16 i
-OBD-kontakten (fast 12 V). Du må velje **nøyaktig éin** modus.
+Battery tests based on `ATRV`, which is the voltage the ELM327 measures on pin 16 of
+the OBD connector (permanent 12 V). You must choose **exactly one** mode.
 
 ```
 fordiag battery --rest     [--seconds N]
@@ -159,147 +174,152 @@ fordiag battery --charging [--minutes N | --seconds N]
 fordiag battery --summary
 ```
 
-| Flagg | Standard | Tyding |
+| Flag | Default | Meaning |
 |---|---|---|
-| `--seconds N` | rest: 10, crank: 15 | Målelengd i sekund. For `--charging` overstyrer han `--minutes`. |
-| `--minutes N` | 3 | Målelengd for `--charging` |
+| `--seconds N` | rest: 10, crank: 15 | Duration in seconds. For `--charging` it overrides `--minutes`. |
+| `--minutes N` | 3 | Duration for `--charging` |
 
-Batteritestane sender berre `ATZ`, `ATE0`, `ATL0` og `ATRV`. **Ingenting går ut på
-CAN-bussen**, så bilen blir ikkje vekt av sjølve målinga.
+The battery tests only send `ATZ`, `ATE0`, `ATL0` and `ATRV`. **Nothing goes out on
+the CAN bus**, so the measurement itself does not wake the car.
 
-Kvar test blir lagra som JSON i `fordiag-data/` (sjå [kapittel 7](#7-filer-verktøyet-lagar)).
+Each test is saved as JSON in `fordiag-data/` (see
+[chapter 7](#7-files-created-by-the-tool)).
 
-### 5.1 `--rest`: kvilespenning
+### 5.1 `--rest`: resting voltage
 
-**Fysisk:** Bilen skal ha stått i fleire timar utan ladar og utan bruk. Tenninga skal
-vere av. Opnar du døra for å kople til kabelen, vaknar modulane og trekkjer straum ei
-stund. Lukk døra og vent 10–30 minutt før du måler. Har du nett ladd med smartladar,
-bør batteriet kvile 12–24 timar først, elles måler du overflateladning.
+**Physical setup:** The car should have been parked for several hours without a
+charger and unused, with the ignition off. Opening the door to plug in the cable
+wakes the modules, and they draw current for a while. Close the door and wait 10–30
+minutes before measuring. If you have just charged with a smart charger, let the
+battery rest for 12–24 hours first, or you will measure surface charge.
 
-Fordiag måler kvart 0,5 sekund og brukar **medianen**.
+fordiag measures every 0.5 seconds and uses the **median**.
 
-| Median | Vurdering |
+| Median | Verdict |
 |---|---|
-| > 13,0 V | Ugyldig: motoren går eller ein ladar er kopla til |
-| ≥ 12,6 V | Fullt og friskt |
-| 12,4–12,5 V | Greitt, men ikkje heilt fullt |
-| < 12,4 V | Utlada eller svekka batteri |
+| > 13.0 V | Invalid: the engine is running or a charger is connected |
+| ≥ 12.6 V | Fully charged and healthy |
+| 12.4–12.5 V | OK, but not fully charged |
+| < 12.4 V | Discharged or weakened battery |
 
-Du får åtvaring om spenninga varierer meir enn 0,3 V under målinga, sidan det tyder
-på at noko i bilen framleis trekkjer straum.
+You get a warning if the voltage varies by more than 0.3 V during the measurement,
+because that means something in the car is still drawing current.
 
-### 5.2 `--crank`: starttest
+### 5.2 `--crank`: crank test
 
-**Fysisk:** Set deg i bilen og slå tenninga på. Køyr kommandoen, og start motoren 2–3
-sekund etter at `>>> START NO <<<` kjem. Målinga varer i 15 sekund.
+**Physical setup:** Sit in the car and switch the ignition on. Run the command, and
+start the engine 2–3 seconds after `>>> START NOW <<<` appears. The measurement lasts
+15 seconds.
 
-Fordiag samplar `ATRV` så raskt kabelen klarer, typisk kvart 20.–60. ms.
+fordiag samples `ATRV` as fast as the cable allows, typically every 20–60 ms.
 
-| Lågaste spenning | Vurdering |
+| Lowest voltage | Verdict |
 |---|---|
-| ≥ 10,0 V | Friskt |
-| 9,6–10,0 V | Grensetilfelle |
-| < 9,6 V | Svakt batteri |
-| Inga fall på minst 1 V | Fann ikkje noko start. Vart motoren starta i tide? |
+| ≥ 10.0 V | Healthy |
+| 9.6–10.0 V | Borderline |
+| < 9.6 V | Weak battery |
+| No drop of at least 1 V | No cranking found. Was the engine started in time? |
 
-Utskrifta viser spenninga før start (median av første 1,5 s), den lågaste målinga og
-spenninga etter start (median av siste 2 s). Du får åtvaring dersom:
+The output shows the voltage before cranking (median of the first 1.5 s), the lowest
+reading, and the voltage after cranking (median of the last 2 s). You get a warning
+if:
 
-- snittintervallet mellom målingar er over 100 ms, sidan botnpunktet då kan vere
-  lågare enn målt
-- det er eit hol på over 500 ms i målingane, sidan ELM-brikka då kan ha mista
-  straumen under start
-- spenninga før start er over 13 V
-- spenninga etter start er under 13 V
+- the mean interval between readings exceeds 100 ms, because the minimum may then be
+  lower than measured
+- there is a gap of more than 500 ms in the readings, because the ELM chip may have
+  lost power while cranking
+- the voltage before cranking is above 13 V
+- the voltage after cranking is below 13 V
 
-### 5.3 `--charging`: ladetest
+### 5.3 `--charging`: charging test
 
-**Fysisk:** Start motoren og la han gå på tomgang heile målinga, som varer i 3 minutt.
-Utskrifta viser ei måling kvart 10. sekund medan testen går.
+**Physical setup:** Start the engine and let it idle for the whole measurement, which
+lasts 3 minutes. A reading is printed every 10 seconds while the test runs.
 
-Fordiag måler éin gong i sekundet og rapporterer:
+fordiag measures once per second and reports:
 
-- minimum, snitt og maksimum
-- **trend** i V/min (lineær regresjon): stigande (> +0,05), fallande (< −0,05) eller
-  stabil
-- kor stor del av tida spenninga var ≥ 13,2 V
+- minimum, mean and maximum
+- the **trend** in V/min (linear regression): rising (> +0.05), falling (< −0.05) or
+  stable
+- the share of the time the voltage was ≥ 13.2 V
 
-| Mønster | Vurdering |
+| Pattern | Verdict |
 |---|---|
-| Maks > 15,0 V | Uvanleg høg, bør sjekkast |
-| Maks < 13,0 V | Låg: generatoren ladar ikkje, eller smartladinga held igjen |
-| Snitt 13,2–14,8 V og min ≥ 12,8 V | Normal |
-| Anna | Varierande, vanleg med Ford si smartlading |
+| Max > 15.0 V | Unusually high, should be checked |
+| Max < 13.0 V | Low: the alternator is not charging, or smart charging is holding back |
+| Mean 13.2–14.8 V and min ≥ 12.8 V | Normal |
+| Anything else | Variable, which is common with Ford smart charging |
 
-Ford si smartlading kan med vilje halde spenninga nede når BMS-en trur batteriet er
-fullt. Får du «Låg», kan du gjenta testen med store forbrukarar på (lys, vifte,
-bakrutevarme).
+Ford smart charging deliberately keeps the voltage low when the BMS thinks the battery
+is full. If you get "Low", repeat the test with large loads on (lights, blower, rear
+window heater).
 
-### 5.4 `--summary`: samla vurdering
+### 5.4 `--summary`: overall assessment
 
-Les dei siste lagra testane av kvar type i `--data-dir` og skriv ei samla vurdering.
-Kommandoen treng verken kabel eller bil.
+Reads the latest saved test of each type in `--data-dir` and prints an overall
+assessment. This command needs neither cable nor car.
 
 ```
 $ fordiag battery --summary
-Siste lagra batteritestar i fordiag-data:
-  Kvile:  12,50 V – Greitt, men ikkje heilt fullt (12,4–12,5 V)  (14.10.2026 16:40 [/dev/ttyUSB0 @ 38400 baud])
-  Start:  lågaste 10,20 V – Friskt: …
-  Lading: snitt 14,48 V – Innanfor vanleg ladeområde  (…)
+Latest saved battery tests in fordiag-data:
+  Rest:     12.50 V – OK, but not fully charged (12.4–12.5 V)  (2026-10-14 16:40 [/dev/ttyUSB0 @ 38400 baud])
+  Crank:    lowest 10.20 V – Healthy: …
+  Charging: mean 14.48 V – Within the normal charging range  (…)
 
-Samla vurdering:
-  • Kvilespenning og starttest ser normale ut. …
+Overall assessment:
+  • Resting voltage and crank test look normal. …
 ```
 
-Resultat frå `--mock` er merka `[mock (ingen bil)]`. Bruk ei eiga `--data-dir` når du
-testar, så dei ikkje blandar seg med ekte målingar.
+Results from `--mock` are labelled `[mock (no car)]`. Use a separate `--data-dir`
+when testing, so they do not mix with real measurements.
 
-### Avgrensingar
+### Limitations
 
-- ELM327 måler med 0,1 V oppløysing, og klonar kan bomme med 0,1–0,2 V. Samanlikn
-  gjerne éin gong med eit multimeter på batteripolane.
-- Spenninga i OBD-kontakten er litt lågare enn på polane, særleg under start.
-- Spenning kan ikkje måle **kapasitet** (Ah). Ein sikker batteritest krev ein
-  belastnings- eller konduktanstestar.
-- Ladestatus (SOC) frå BCM blir ikkje lesen, fordi vi ikkje har nokon verifisert DID
-  for denne bilen.
+- The ELM327 measures with 0.1 V resolution, and clones can be off by 0.1–0.2 V.
+  Compare once with a multimeter on the battery terminals.
+- The voltage at the OBD connector is slightly lower than at the terminals,
+  especially while cranking.
+- Voltage cannot measure **capacity** (Ah). A reliable battery test requires a load
+  or conductance tester.
+- The state of charge (SOC) is not read from the BCM, because we have no verified DID
+  for this car.
 
 ---
 
 ## 6. `fordiag check`
 
-Sjekkar om ein kommando står på tillatslista, **utan å sende noko**. Kommandoen er
-nyttig når du vil sjå kva verktøyet godtek.
+Checks whether a command is on the allowlist, **without sending anything**. This is
+useful for seeing what the tool accepts.
 
 ```
-fordiag check "<kommando>"
+fordiag check "<command>"
 ```
 
-Tekst som byrjar med `AT`, blir tolka som AT-kommando. Alt anna blir tolka som hex
-(mellomrom og små/store bokstavar spelar inga rolle).
+Text starting with `AT` is parsed as an AT command. Anything else is parsed as hex
+(whitespace and letter case do not matter).
 
 ```
 $ fordiag check "19 02 ff"
-TILLATEN: Diag(Uds(ReadDtcInformation(ByStatusMask(255)))) → sendast som «1902FF»
+ALLOWED: Diag(Uds(ReadDtcInformation(ByStatusMask(255)))) → sent as "1902FF"
 
 $ fordiag check "14 FF FF FF"
-AVVIST: teneste 0x14 er FORBODEN (UDS: ClearDiagnosticInformation) – bruk FORScan om dette verkeleg trengst
+REJECTED: service 0x14 is FORBIDDEN (UDS: ClearDiagnosticInformation) – use FORScan if you really need this
 
 $ fordiag check "ATSH 123"
-AVVIST: CAN-ID 0x123 er utanfor diagnoseområdet 0x700–0x7FF
+REJECTED: CAN ID 0x123 is outside the diagnostic range 0x700–0x7FF
 ```
 
 ---
 
-## 7. Filer verktøyet lagar
+## 7. Files created by the tool
 
-Alt hamnar under `--data-dir`, som er `fordiag-data/` dersom du ikkje vel noko anna.
-Mappa er lagd til i `.gitignore`.
+Everything goes under `--data-dir`, which is `fordiag-data/` unless you choose
+something else. The directory is listed in `.gitignore`.
 
-### `fordiag-data/logs/raw-ÅÅÅÅMMDD-TTMMSS.jsonl`
+### `fordiag-data/logs/raw-YYYYMMDD-HHMMSS.jsonl`
 
-Rålogg med all kommunikasjon, éi JSON-linje per hending. Kvar linje blir skriven til
-disk med ein gong, så loggen overlever om programmet krasjar.
+Raw log of all communication, one JSON line per event. Each line is written to disk
+immediately, so the log survives if the program crashes.
 
 ```json
 {"ts":"2026-10-14T16:40:38.918+02:00","dir":"info","data":"transport: /dev/ttyUSB0 @ 38400 baud"}
@@ -307,97 +327,98 @@ disk med ein gong, så loggen overlever om programmet krasjar.
 {"ts":"2026-10-14T16:40:38.943+02:00","dir":"rx","data":"\r\rELM327 v1.5\r\r"}
 ```
 
-| `dir` | Tyding |
+| `dir` | Meaning |
 |---|---|
-| `tx` | Sendt til kabelen (nøyaktig tekst, utan CR) |
-| `rx` | Motteke frå kabelen (rått, utan `>`-prompten) |
-| `err` | Feil, t.d. tidsavbrot eller avvist kommando |
-| `info` | Hendingar som portopning og baud-søk |
+| `tx` | Sent to the cable (exact text, without CR) |
+| `rx` | Received from the cable (raw, without the `>` prompt) |
+| `err` | Error, e.g. a timeout or a rejected command |
+| `info` | Events such as opening the port and baud search |
 
-Eit kjapt oversyn får du med `jq` (om du har det):
+For a quick overview with `jq` (if installed):
 
 ```sh
 jq -r '"\(.ts) \(.dir) \(.data)"' fordiag-data/logs/raw-*.jsonl | less
 ```
 
-### `fordiag-data/battery-<modus>-ÅÅÅÅMMDD-TTMMSS.json`
+### `fordiag-data/battery-<mode>-YYYYMMDD-HHMMSS.json`
 
-Resultatet frå éin batteritest: starttid, kjelde, analyse og **alle målingane**
-(`t_ms`, `volts`). Det er desse filene `--summary` les, og seinare `report`.
+The result of one battery test: start time, source, analysis and **every
+measurement** (`t_ms`, `volts`). These are the files `--summary` reads, and later
+`report`.
 
 ---
 
-## 8. Tryggleik og tillatsliste
+## 8. Safety and the allowlist
 
-Tillatslista er handheva i koden (`src/command.rs`), ikkje berre i dokumentasjonen.
-Det finst ingen måte å sende vilkårlege bytes på. Fordiag har heller ingen kommando
-for å sende rå hex.
+The allowlist is enforced in the code (`src/command.rs`), not only in the
+documentation. There is no way to send arbitrary bytes, and fordiag has no command
+for sending raw hex.
 
-### Tillate
+### Allowed
 
-| Type | Kommandoar |
+| Type | Commands |
 |---|---|
-| AT til ELM327 | `ATZ`, `ATE0`, `ATL0`, `ATS0/1`, `ATH0/1`, `ATSP0/6/B`, `ATPB 81 04`, `ATSH 7xx`, `ATCRA 7xx`, `ATCRA`, `ATCAF1`, `ATST xx`, `ATRV`, `ATI`, `ATDP` |
+| AT to the ELM327 | `ATZ`, `ATE0`, `ATL0`, `ATS0/1`, `ATH0/1`, `ATSP0/6/B`, `ATPB 81 04`, `ATSH 7xx`, `ATCRA 7xx`, `ATCRA`, `ATCAF1`, `ATST xx`, `ATRV`, `ATI`, `ATDP` |
 | OBD-II | `01 pp`, `03`, `07`, `09 pp`, `0A` |
-| UDS | `19 01 mm`, `19 02 mm`, `19 0A`, `22 hhll` (éin DID), `3E 00` |
+| UDS | `19 01 mm`, `19 02 mm`, `19 0A`, `22 hhll` (one DID), `3E 00` |
 
-### Avvist, mellom anna
+### Rejected, among others
 
-| Kva | Kvifor |
+| What | Why |
 |---|---|
-| `04` | Slettar OBD-feilkodar |
-| `08` | OBD: styrer system om bord |
-| `10` | Byter diagnosesesjon |
-| `11` | Restartar modul (ECU-reset) |
-| `14` | Slettar UDS-feilkodar |
+| `04` | Clears OBD DTCs |
+| `08` | OBD: controls on-board systems |
+| `10` | Changes the diagnostic session |
+| `11` | Resets a module (ECU reset) |
+| `14` | Clears UDS DTCs |
 | `27` | Security access |
-| `28` | Kommunikasjonskontroll |
-| `2E`, `3D` | Skriv data eller minne |
-| `2F` | Styrer utgangar |
-| `31` | Køyrer rutinar |
-| `34`–`37` | Nedlasting/opplasting |
-| `85` | Slår av/på DTC-registrering |
-| `3E 80` | Berre `3E 00` er tillate |
-| `ATCAF0` | Ville gjort det mogleg å sende rå CAN-rammer |
-| `ATMA`, `ATBRD`, `ATCV`, `ATPP…`, `ATWM…` | Ikkje nødvendig, og kan endre brikka |
-| `ATPB` med anna enn `81 04` | Feil bitrate kan forstyrre bussen |
-| `ATSH`/`ATCRA` utanfor 0x700–0x7FF | Avgrensa til diagnose-ID-ar |
+| `28` | Communication control |
+| `2E`, `3D` | Writes data or memory |
+| `2F` | Controls outputs |
+| `31` | Runs routines |
+| `34`–`37` | Download/upload |
+| `85` | Turns DTC recording on/off |
+| `3E 80` | Only `3E 00` is allowed |
+| `ATCAF0` | Would allow raw CAN frames to be sent |
+| `ATMA`, `ATBRD`, `ATCV`, `ATPP…`, `ATWM…` | Not needed, and can change the chip |
+| `ATPB` with anything other than `81 04` | A wrong bit rate can disturb the bus |
+| `ATSH`/`ATCRA` outside 0x700–0x7FF | Restricted to diagnostic IDs |
 
-Andre tryggleikstiltak:
+Other safety measures:
 
-- Rett før noko blir skrive, blir teksten tolka på nytt. Han må gje nøyaktig same
-  kommando, elles blir han ikkje send.
-- Fordiag sender aldri ei tom linje. Ein tom CR får ELM327 til å gjenta *førre*
-  kommando, og den kunne vore noko FORScan sende.
+- Right before anything is written, the text is parsed again. It must produce exactly
+  the same command, or it is not sent.
+- fordiag never sends an empty line. A bare CR makes the ELM327 repeat the *previous*
+  command, which could have been something FORScan sent.
 
-Treng du noko som ikkje står på lista, gjer det i **FORScan**.
+If you need something that is not on the list, do it in **FORScan**.
 
 ---
 
-## 9. Feilsøking
+## 9. Troubleshooting
 
-| Symptom | Moglege årsaker og tiltak |
+| Symptom | Possible causes and fixes |
 |---|---|
-| `klarte ikkje opne /dev/ttyUSB0` | Kabelen er ikkje i, FORScan/Wine held porten, eller du manglar `dialout`. Sjekk `ls -l /dev/ttyUSB*` og `groups`. |
-| `Permission denied` | Legg deg i `dialout` og logg ut og inn att. |
-| `fann ingen ELM327 på …` | Kabelen er ikkje kopla til bilen (ELM-en får straum frå OBD-kontakten), feil port, eller uvanleg baudrate. Prøv `--baud 9600` eller `--baud 115200`. |
-| `NO DATA` på `--probe` | Tenninga er av, brytaren står på MS, eller modulen søv. |
-| `CAN ERROR` / `BUS ERROR` | Truleg feil buss for brytarstillinga, t.d. `--bus ms` med brytaren på HS. |
-| `ELM327 svarte «?»` | Brikka kjenner ikkje kommandoen. Enkle klonar manglar ofte `ATPB` (trengst for `--bus ms`). |
-| `tidsavbrot` | Laus kabel, eller ELM-en har mista straumen. Sjå `err`-linjene i råloggen. |
-| Kvile-test seier «Ugyldig» | Motoren går, ein ladar er tilkopla, eller du målte for kort tid etter køyring eller lading. |
-| Starttest finn ikkje noko start | Motoren vart starta for seint. Prøv `--seconds 25`. |
-| Spenninga skil seg frå multimeteret | Klonar kan bomme med 0,1–0,2 V. Hugs differansen når du les tala. |
+| `could not open /dev/ttyUSB0` | The cable is not plugged in, FORScan/Wine is holding the port, or you are not in `dialout`. Check `ls -l /dev/ttyUSB*` and `groups`. |
+| `Permission denied` | Add yourself to `dialout`, then log out and back in. |
+| `no ELM327 found on …` | The cable is not connected to the car (the ELM is powered by the OBD connector), the port is wrong, or the baud rate is unusual. Try `--baud 9600` or `--baud 115200`. |
+| `NO DATA` with `--probe` | The ignition is off, the switch is on MS, or the module is asleep. |
+| `CAN ERROR` / `BUS ERROR` | Probably the wrong bus for the switch position, e.g. `--bus ms` with the switch on HS. |
+| `ELM327 replied "?"` | The chip does not know the command. Basic clones often lack `ATPB` (needed for `--bus ms`). |
+| `timeout` | Loose cable, or the ELM lost power. Look at the `err` lines in the raw log. |
+| Rest test says "Invalid" | The engine is running, a charger is connected, or you measured too soon after driving or charging. |
+| Crank test finds no cranking | The engine was started too late. Try `--seconds 25`. |
+| Voltage differs from the multimeter | Clones can be off by 0.1–0.2 V. Keep the difference in mind when reading the numbers. |
 
-Legg ved den nyaste `raw-*.jsonl` når du ber om hjelp.
+Attach the latest `raw-*.jsonl` when asking for help.
 
 ---
 
-## 10. Testing utan bil
+## 10. Testing without a car
 
-### Innebygd simulator (`--mock`)
+### Built-in simulator (`--mock`)
 
-Alle kommandoane fungerer med `--mock`. Simulatoren hoppar òg over «Trykk Enter».
+All commands work with `--mock`. The simulator also skips "Press Enter".
 
 ```sh
 D=$(mktemp -d)
@@ -408,22 +429,21 @@ fordiag --mock --data-dir $D battery --charging --seconds 20
 fordiag --mock --data-dir $D battery --summary
 ```
 
-### Einingstestar
+### Unit tests
 
 ```sh
 cargo test
 ```
 
-Testane dekkjer tillatslista (alle 256 tenestebytar), svartolking, init-sekvensar mot
-`MockTransport` og analysane med grenseverdiane.
+The tests cover the allowlist (all 256 service bytes), response parsing, init
+sequences against `MockTransport`, and the analyses with their thresholds.
 
-### ELM327-emulator (testar serielaget)
+### ELM327 emulator (tests the serial layer)
 
 ```sh
 pip install ELM327-emulator
-python3 -m elm -s car          # skriv ut t.d. /dev/pts/3
+python3 -m elm -s car          # prints e.g. /dev/pts/3
 fordiag --port /dev/pts/3 connect --probe
 ```
 
-Emulatoren rapporterer spenning rundt 13 V, så `--rest` vil melde «Ugyldig». Det er
-venta.
+The emulator reports about 13 V, so `--rest` will say "Invalid". That is expected.

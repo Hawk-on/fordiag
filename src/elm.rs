@@ -1,21 +1,21 @@
-//! Høgnivå-API mot ELM327: init, versjon, protokoll, spenning og
-//! diagnoseførespurnader. Tolkar dei rå svara frå transportlaget.
+//! High-level ELM327 API: init, version, protocol, voltage and diagnostic
+//! requests. Interprets the raw responses from the transport layer.
 
 use crate::command::{AtCommand, Command, DiagRequest, Protocol, ProtocolBConfig};
 use crate::transport::{RawLog, SerialTransport, Transport, TransportError};
 use anyhow::{Result, anyhow, bail};
 use std::time::Duration;
 
-/// Kva CAN-buss vi snakkar med.
+/// Which CAN bus we talk to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum Bus {
-    /// HS-CAN, 500 kbit/s (motorstyring o.a.)
+    /// HS-CAN, 500 kbit/s (engine control etc.)
     Hs,
-    /// MS-CAN, 125 kbit/s (komfortmodular; krev at brytaren på kabelen står på MS)
+    /// MS-CAN, 125 kbit/s (comfort modules; requires the cable switch set to MS)
     Ms,
 }
 
-/// Feilmeldingar ELM327 kan svare med i staden for data.
+/// Error messages the ELM327 may return instead of data.
 const ELM_ERRORS: &[&str] = &[
     "?",
     "CAN ERROR",
@@ -33,12 +33,12 @@ const ELM_ERRORS: &[&str] = &[
     "ERROR",
 ];
 
-/// Svar på ein diagnoseførespurnad.
+/// Response to a diagnostic request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DiagReply {
-    /// Ei eller fleire svarlinjer, t.d. `7E8 06 41 00 BE 3F A8 13`.
+    /// One or more response lines, e.g. `7E8 06 41 00 BE 3F A8 13`.
     Data(Vec<String>),
-    /// `NO DATA` – ingen modul svarte.
+    /// `NO DATA` – no module responded.
     NoData,
 }
 
@@ -55,13 +55,13 @@ impl Elm {
         self.t.describe()
     }
 
-    /// Send ein kommando og returner reinska svarlinjer.
-    /// ELM-feilmeldingar (t.d. `?`, `CAN ERROR`) blir gjort om til `Err`.
+    /// Send a command and return cleaned response lines.
+    /// ELM error messages (e.g. `?`, `CAN ERROR`) are turned into `Err`.
     pub fn send(&mut self, cmd: Command) -> Result<Vec<String>> {
         let raw = self.t.exchange(&cmd, timeout_for(&cmd))?;
         let lines = clean_response(&raw, &cmd.to_wire());
         if let Some(err) = lines.iter().find(|l| ELM_ERRORS.contains(&l.as_str())) {
-            bail!("ELM327 svarte «{err}» på {}", cmd.to_wire());
+            bail!("ELM327 replied \"{err}\" to {}", cmd.to_wire());
         }
         Ok(lines)
     }
@@ -70,18 +70,18 @@ impl Elm {
         self.send(Command::At(at))
     }
 
-    /// Send ein AT-kommando som skal svare «OK».
+    /// Send an AT command that should reply "OK".
     fn at_ok(&mut self, at: AtCommand) -> Result<()> {
         let lines = self.at(at)?;
         if lines.iter().any(|l| l == "OK") {
             Ok(())
         } else {
-            bail!("venta «OK» på {}, fekk {:?}", at.to_wire(), lines)
+            bail!("expected \"OK\" for {}, got {:?}", at.to_wire(), lines)
         }
     }
 
-    /// Grunnleggjande init: `ATZ`, `ATE0`, `ATL0`. Sender ingenting på
-    /// CAN-bussen, så bilen blir ikkje vekt. Returnerer versjonsstrengen frå ATZ.
+    /// Basic init: `ATZ`, `ATE0`, `ATL0`. Sends nothing on the CAN bus, so the
+    /// car is not woken up. Returns the version string from ATZ.
     pub fn reset(&mut self) -> Result<String> {
         let lines = self.at(AtCommand::Reset)?;
         let version = lines.iter().find(|l| l.contains("ELM")).cloned().unwrap_or_default();
@@ -90,13 +90,13 @@ impl Elm {
         Ok(version)
     }
 
-    /// Full init for diagnose: reset + `ATS1`, `ATH1` og protokoll.
+    /// Full init for diagnostics: reset + `ATS1`, `ATH1` and protocol.
     ///
     /// * HS: `ATSP6`
     /// * MS: `ATPB 81 04` + `ATSPB`
     ///
-    /// Sjølve protokollvalet sender heller ikkje noko på bussen; det skjer
-    /// først ved første diagnoseførespurnad.
+    /// Selecting the protocol does not send anything on the bus either; that
+    /// only happens with the first diagnostic request.
     pub fn init(&mut self, bus: Bus) -> Result<String> {
         let version = self.reset()?;
         self.at_ok(AtCommand::Spaces(true))?;
@@ -106,7 +106,7 @@ impl Elm {
             Bus::Ms => {
                 self.at_ok(AtCommand::ProtocolB(ProtocolBConfig::MsCan125k))
                     .map_err(|e| {
-                        anyhow!("{e:#}\n(Kabelen støttar kanskje ikkje ATPB; då er det truleg ein enkel klon.)")
+                        anyhow!("{e:#}\n(The cable may not support ATPB; it is then probably a basic clone.)")
                     })?;
                 self.at_ok(AtCommand::SetProtocol(Protocol::UserB))?;
             }
@@ -122,14 +122,14 @@ impl Elm {
         Ok(self.at(AtCommand::DescribeProtocol)?.join(" "))
     }
 
-    /// Les spenning på OBD-kontakten (V).
+    /// Read the voltage on the OBD connector (V).
     pub fn voltage(&mut self) -> Result<f32> {
         let lines = self.at(AtCommand::ReadVoltage)?;
-        let line = lines.first().ok_or_else(|| anyhow!("tomt svar på ATRV"))?;
+        let line = lines.first().ok_or_else(|| anyhow!("empty response to ATRV"))?;
         parse_voltage(line)
     }
 
-    /// Send ein diagnoseførespurnad.
+    /// Send a diagnostic request.
     pub fn diag(&mut self, req: DiagRequest) -> Result<DiagReply> {
         let lines = self.send(Command::Diag(req))?;
         let lines: Vec<String> = lines.into_iter().filter(|l| !l.starts_with("SEARCHING")).collect();
@@ -140,18 +140,18 @@ impl Elm {
     }
 }
 
-/// Kor lenge vi ventar på svar for ulike kommandoar.
+/// How long we wait for a response to different commands.
 fn timeout_for(cmd: &Command) -> Duration {
     match cmd {
         Command::At(AtCommand::Reset) => Duration::from_secs(3),
         Command::At(_) => Duration::from_secs(2),
-        // Første førespurnad etter protokollval kan ta tid.
+        // The first request after selecting a protocol can take a while.
         Command::Diag(_) => Duration::from_secs(6),
     }
 }
 
-/// Del opp eit rått svar i linjer, fjern tomme linjer og eventuelt ekko av
-/// kommandoen vi sende (ekko er på fram til `ATE0`).
+/// Split a raw response into lines, removing empty lines and any echo of the
+/// command we sent (echo is on until `ATE0`).
 pub fn clean_response(raw: &str, sent_wire: &str) -> Vec<String> {
     raw.split(['\r', '\n'])
         .map(|l| l.trim())
@@ -161,20 +161,20 @@ pub fn clean_response(raw: &str, sent_wire: &str) -> Vec<String> {
         .collect()
 }
 
-/// Tolk «12.6V» (eller «12.6 V») til 12.6.
+/// Parse "12.6V" (or "12.6 V") into 12.6.
 pub fn parse_voltage(line: &str) -> Result<f32> {
     let s = line.trim().trim_end_matches(['V', 'v']).trim();
     let v: f32 = s
         .parse()
-        .map_err(|_| anyhow!("klarte ikkje tolke spenning frå «{line}»"))?;
+        .map_err(|_| anyhow!("could not parse voltage from \"{line}\""))?;
     if !(0.0..=30.0).contains(&v) {
-        bail!("urimeleg spenning {v} V frå «{line}»");
+        bail!("implausible voltage {v} V from \"{line}\"");
     }
     Ok(v)
 }
 
-/// Opne seriellporten. Prøver 38400 baud, så 115200, om `baud` ikkje er gitt.
-/// Testar med `ATI`, som berre spør brikka om versjon.
+/// Open the serial port. Tries 38400 baud, then 115200, if `baud` is not given.
+/// Probes with `ATI`, which only asks the chip for its version.
 pub fn open_serial(path: &str, baud: Option<u32>, log: &RawLog) -> Result<Box<dyn Transport>> {
     let candidates = match baud {
         Some(b) => vec![b],
@@ -183,22 +183,22 @@ pub fn open_serial(path: &str, baud: Option<u32>, log: &RawLog) -> Result<Box<dy
     let probe = Command::At(AtCommand::Identify);
     let mut last_err = None;
     for b in candidates {
-        log.write("info", &format!("prøver {path} @ {b} baud"));
+        log.write("info", &format!("trying {path} @ {b} baud"));
         let mut port = SerialTransport::open(path, b)?;
-        // Første forsøk kan få «?» om det låg rusk i ELM-bufferen; prøv to gonger.
+        // The first attempt may get "?" if there was junk in the ELM buffer; try twice.
         for _ in 0..2 {
             match port.exchange(&probe, Duration::from_millis(1500)) {
                 Ok(resp) if resp.contains("ELM") => {
-                    log.write("info", &format!("ELM327 svarte @ {b} baud: {resp:?}"));
+                    log.write("info", &format!("ELM327 responded @ {b} baud: {resp:?}"));
                     return Ok(Box::new(port));
                 }
                 Ok(resp) => {
-                    log.write("info", &format!("uventa svar @ {b}: {resp:?}"));
-                    last_err = Some(anyhow!("uventa svar: {resp:?}"));
+                    log.write("info", &format!("unexpected response @ {b}: {resp:?}"));
+                    last_err = Some(anyhow!("unexpected response: {resp:?}"));
                 }
                 Err(e) => {
                     let timeout = e.downcast_ref::<TransportError>().is_some();
-                    log.write("info", &format!("ingen svar @ {b}: {e:#}"));
+                    log.write("info", &format!("no response @ {b}: {e:#}"));
                     last_err = Some(e);
                     if timeout {
                         break;
@@ -207,8 +207,8 @@ pub fn open_serial(path: &str, baud: Option<u32>, log: &RawLog) -> Result<Box<dy
             }
         }
     }
-    Err(last_err.unwrap_or_else(|| anyhow!("ingen svar")).context(format!(
-        "fann ingen ELM327 på {path}. Sjekk at kabelen er kopla til bilen og PC-en, og at FORScan er lukka."
+    Err(last_err.unwrap_or_else(|| anyhow!("no response")).context(format!(
+        "no ELM327 found on {path}. Check that the cable is connected to the car and the PC, and that FORScan is closed."
     )))
 }
 
@@ -219,7 +219,7 @@ mod tests {
     use crate::transport::MockTransport;
 
     #[test]
-    fn reinsk_svar_fjernar_ekko_og_tomme_linjer() {
+    fn clean_response_removes_echo_and_empty_lines() {
         assert_eq!(clean_response("ATZ\r\r\rELM327 v1.5\r\r", "ATZ"), vec!["ELM327 v1.5"]);
         assert_eq!(clean_response("12.4V\r\r", "ATRV"), vec!["12.4V"]);
         assert_eq!(
@@ -229,7 +229,7 @@ mod tests {
     }
 
     #[test]
-    fn tolk_spenning() {
+    fn parse_voltage_values() {
         assert_eq!(parse_voltage("12.6V").unwrap(), 12.6);
         assert_eq!(parse_voltage(" 9.8 V ").unwrap(), 9.8);
         assert!(parse_voltage("?").is_err());
@@ -237,7 +237,7 @@ mod tests {
     }
 
     #[test]
-    fn init_hs_sender_rett_sekvens() {
+    fn init_hs_sends_correct_sequence() {
         let mock = MockTransport::elm_defaults();
         let sent = mock.sent_handle();
         let mut elm = Elm::new(Box::new(mock));
@@ -246,7 +246,7 @@ mod tests {
     }
 
     #[test]
-    fn init_ms_set_opp_protokoll_b() {
+    fn init_ms_configures_protocol_b() {
         let mock = MockTransport::elm_defaults();
         let sent = mock.sent_handle();
         let mut elm = Elm::new(Box::new(mock));
@@ -258,14 +258,14 @@ mod tests {
     }
 
     #[test]
-    fn elm_feil_blir_err() {
+    fn elm_error_becomes_err() {
         let mock = MockTransport::elm_defaults().set("ATRV", "?\r\r");
         let mut elm = Elm::new(Box::new(mock));
         assert!(elm.voltage().is_err());
     }
 
     #[test]
-    fn diag_no_data_og_data() {
+    fn diag_no_data_and_data() {
         let mock = MockTransport::elm_defaults()
             .on("0100", "SEARCHING...\rNO DATA\r\r")
             .on("0100", "7E8 06 41 00 BE 3F A8 13\r\r");
