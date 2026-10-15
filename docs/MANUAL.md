@@ -5,7 +5,7 @@
 that writes to the car, such as clearing DTCs or resetting the battery monitoring
 system (BMS), is done in FORScan.
 
-This manual covers version 0.1 (phases 1 and 2: connection and battery).
+This manual covers version 0.1 (phases 1–3: connection, battery and DTCs).
 
 > [!WARNING]
 > **Disclaimer: use at your own risk.** fordiag is provided "as is", without
@@ -27,11 +27,12 @@ This manual covers version 0.1 (phases 1 and 2: connection and battery).
 3. [Global flags](#3-global-flags)
 4. [`fordiag connect`](#4-fordiag-connect)
 5. [`fordiag battery`](#5-fordiag-battery)
-6. [`fordiag check`](#6-fordiag-check)
-7. [Files created by the tool](#7-files-created-by-the-tool)
-8. [Safety and the allowlist](#8-safety-and-the-allowlist)
-9. [Troubleshooting](#9-troubleshooting)
-10. [Testing without a car](#10-testing-without-a-car)
+6. [`fordiag dtc`](#6-fordiag-dtc)
+7. [`fordiag check`](#7-fordiag-check)
+8. [Files created by the tool](#8-files-created-by-the-tool)
+9. [Safety and the allowlist](#9-safety-and-the-allowlist)
+10. [Troubleshooting](#10-troubleshooting)
+11. [Testing without a car](#11-testing-without-a-car)
 
 ---
 
@@ -81,11 +82,12 @@ e.g. `cp target/release/fordiag ~/.local/bin/`.
 | `fordiag battery --crank` | Lowest voltage while cranking | Yes |
 | `fordiag battery --charging` | Charging voltage with the engine running | Yes |
 | `fordiag battery --summary` | Overall assessment of saved tests | No |
+| `fordiag dtc` | Read DTCs from the PCM and other modules | Yes (or `--mock`) |
+| `fordiag dtc --list` | List the candidate modules and addresses | No |
 | `fordiag check "<command>"` | Check a command against the allowlist | No |
 | `fordiag help [command]` | Built-in help | No |
 
-Planned: `fordiag dtc` (DTCs, phase 3) and `fordiag report` (Markdown report,
-phase 4).
+Planned: `fordiag report` (Markdown report, phase 4).
 
 ---
 
@@ -183,7 +185,7 @@ The battery tests only send `ATZ`, `ATE0`, `ATL0` and `ATRV`. **Nothing goes out
 the CAN bus**, so the measurement itself does not wake the car.
 
 Each test is saved as JSON in `fordiag-data/` (see
-[chapter 7](#7-files-created-by-the-tool)).
+[chapter 8](#8-files-created-by-the-tool)).
 
 ### 5.1 `--rest`: resting voltage
 
@@ -286,7 +288,106 @@ when testing, so they do not mix with real measurements.
 
 ---
 
-## 6. `fordiag check`
+## 6. `fordiag dtc`
+
+Reads diagnostic trouble codes. **It only reads; nothing is cleared.**
+
+```
+fordiag dtc [--bus hs|ms] [--module NAME]... [--list]
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--bus hs` | ✓ | HS-CAN 500 kbit/s. Set the cable switch to **HS**. |
+| `--bus ms` | | MS-CAN 125 kbit/s. Set the cable switch to **MS**. |
+| `--module NAME` | all | Only these modules; repeat the flag for several (e.g. `--module BCM --module ACM`). |
+| `--list` | | Show the candidate modules and addresses, then exit. |
+
+### Physical setup
+
+- **Ignition on, engine off.** The scan takes about 1 second per module.
+- Run it twice, once with `--bus hs` (switch on HS) and once with `--bus ms`
+  (switch on MS). Which modules live on which bus is not verified for this car, so
+  every candidate is tried on both.
+
+### What happens
+
+1. Init as in `connect`, plus `ATCAF1` (automatic ISO-TP formatting) and `ATST64`
+   (400 ms response timeout).
+2. For each module: `ATSH <request ID>` and `ATCRA <request ID + 8>`, so only that
+   module's answers are received.
+3. For the **PCM** only: OBD-II modes `03` (stored), `07` (pending) and `0A`
+   (permanent).
+4. For every module: UDS `19 02 FF` (all DTCs with their status byte).
+
+Multi-frame answers (ISO-TP) are reassembled. A "response pending" (`7F 19 78`)
+followed by the real answer is handled.
+
+### Candidate modules
+
+**All addresses are unverified for this car.** They are common Ford addresses from
+other models. A module only counts as verified once it has answered. Run
+`fordiag dtc --list` for the current list:
+
+| Module | Request → response | Guessed bus | Description |
+|---|---|---|---|
+| PCM | 7E0 → 7E8 | HS | Powertrain control module (engine) |
+| TCM | 7E1 → 7E9 | HS | Transmission control module (PowerShift) |
+| ABS | 760 → 768 | HS | Anti-lock brakes / stability control |
+| RCM | 737 → 73F | HS | Restraints control module (airbags) |
+| PSCM | 730 → 738 | HS | Power steering control module |
+| IPC | 720 → 728 | ? | Instrument panel cluster |
+| BCM | 726 → 72E | ? | Body control module (incl. battery monitoring) |
+| ACM | 727 → 72F | MS | Audio control module (radio) |
+| APIM | 7D0 → 7D8 | MS | SYNC |
+| HVAC | 733 → 73B | ? | Climate control |
+| GWM | 716 → 71E | ? | Gateway module (may not exist) |
+| DDM | 740 → 748 | MS | Driver door module |
+| PDM | 741 → 749 | MS | Passenger door module |
+| PAM | 736 → 73E | ? | Parking aid module |
+
+### Reading the output
+
+```
+== BCM (726 → 72E) – Body control module (incl. battery monitoring) [responded] ==
+  UDS 19 02 FF         3 DTC(s):
+    U3003:16   SAE-defined, type: circuit voltage below threshold (suggestion), status 0x08 [confirmed]
+```
+
+(Example from `--mock`; the codes are made up.)
+
+- **Code:** `U3003:16` is the DTC (`U3003`) plus the failure type byte (`16`).
+  Standard OBD-II codes (modes 03/07/0A) have no failure type byte.
+- **Category:** `SAE-defined` or `manufacturer-specific`, from the first two
+  characters. This is a rough guide only.
+- **Type:** a generic SAE J2012 description of the failure type byte. It is a
+  **suggestion** and must be checked against Ford documentation.
+- **Status:** the UDS status bits (ISO 14229). `confirmed` means the fault has been
+  confirmed. `test failed now` means it is present right now. `failed since clear`
+  means it has failed at least once since the codes were last cleared.
+- **What the code means is not included.** fordiag does not guess the meaning of
+  Ford-specific codes. Look them up in FORScan or Ford documentation.
+
+Per module, the result is one of:
+
+| Result | Meaning |
+|---|---|
+| `no DTCs` | The module answered and has no stored codes |
+| `N DTC(s)` | The module answered with codes |
+| `negative response 0x.. (…)` | The module answered but refused the request; the address is still confirmed |
+| `no response` | Nothing answered on this address on this bus |
+| `error: …` | ELM error or malformed answer; see the raw log |
+
+The summary at the end lists which modules responded on the bus that was scanned.
+**Please share it**, so the address table can be marked as verified.
+
+After deep discharges, expect some `U` codes (lost communication) and voltage-related
+failure types. These may be after-effects of the low voltage rather than faults in the
+modules themselves.
+
+The result is saved as `fordiag-data/dtc-<bus>-YYYYMMDD-HHMMSS.json`.
+
+## 7. `fordiag check`
 
 Checks whether a command is on the allowlist, **without sending anything**. This is
 useful for seeing what the tool accepts.
@@ -311,7 +412,7 @@ REJECTED: CAN ID 0x123 is outside the diagnostic range 0x700–0x7FF
 
 ---
 
-## 7. Files created by the tool
+## 8. Files created by the tool
 
 Everything goes under `--data-dir`, which is `fordiag-data/` unless you choose
 something else. The directory is listed in `.gitignore`.
@@ -340,6 +441,12 @@ For a quick overview with `jq` (if installed):
 jq -r '"\(.ts) \(.dir) \(.data)"' fordiag-data/logs/raw-*.jsonl | less
 ```
 
+### `fordiag-data/dtc-<bus>-YYYYMMDD-HHMMSS.json`
+
+The result of one DTC scan: start time, source, bus, and for each module every
+request, its outcome (DTCs, negative response, no response or error) and the raw
+response lines.
+
 ### `fordiag-data/battery-<mode>-YYYYMMDD-HHMMSS.json`
 
 The result of one battery test: start time, source, analysis and **every
@@ -348,7 +455,7 @@ measurement** (`t_ms`, `volts`). These are the files `--summary` reads, and late
 
 ---
 
-## 8. Safety and the allowlist
+## 9. Safety and the allowlist
 
 The allowlist is enforced in the code (`src/command.rs`), not only in the
 documentation. There is no way to send arbitrary bytes, and fordiag has no command
@@ -395,7 +502,7 @@ If you need something that is not on the list, do it in **FORScan**.
 
 ---
 
-## 9. Troubleshooting
+## 10. Troubleshooting
 
 | Symptom | Possible causes and fixes |
 |---|---|
@@ -403,6 +510,8 @@ If you need something that is not on the list, do it in **FORScan**.
 | `Permission denied` | Add yourself to `dialout`, then log out and back in. |
 | `no ELM327 found on …` | The cable is not connected to the car (the ELM is powered by the OBD connector), the port is wrong, or the baud rate is unusual. Try `--baud 9600` or `--baud 115200`. |
 | `NO DATA` with `--probe` | The ignition is off, the switch is on MS, or the module is asleep. |
+| `dtc`: every module says `no response` | Ignition off, or the switch does not match `--bus`. |
+| `dtc`: `BUFFER FULL` | A long answer overflowed the ELM's buffer. Try `--baud 115200` if the cable supports it. |
 | `CAN ERROR` / `BUS ERROR` | Probably the wrong bus for the switch position, e.g. `--bus ms` with the switch on HS. |
 | `ELM327 replied "?"` | The chip does not know the command. Basic clones often lack `ATPB` (needed for `--bus ms`). |
 | `timeout` | Loose cable, or the ELM lost power. Look at the `err` lines in the raw log. |
@@ -414,7 +523,7 @@ Attach the latest `raw-*.jsonl` when asking for help.
 
 ---
 
-## 10. Testing without a car
+## 11. Testing without a car
 
 ### Built-in simulator (`--mock`)
 
@@ -436,7 +545,8 @@ cargo test
 ```
 
 The tests cover the allowlist (all 256 service bytes), response parsing, init
-sequences against `MockTransport`, and the analyses with their thresholds.
+sequences against `MockTransport`, ISO-TP reassembly, DTC decoding, module scans
+with recorded answers, and the analyses with their thresholds.
 
 ### ELM327 emulator (tests the serial layer)
 

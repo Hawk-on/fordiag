@@ -44,7 +44,7 @@ FORScan and fordiag cannot use the cable at the same time.
    documentation**. Do not invent meanings for Ford-specific B and U codes.
 9. Do not clear DTCs, and do not attempt a BMS reset.
 
-## Unverified candidate addresses (phase 3)
+## Candidate module addresses (all unverified)
 
 | Module | Request | Response (+8) | Bus | Status |
 |---|---|---|---|---|
@@ -53,6 +53,16 @@ FORScan and fordiag cannot use the cable at the same time.
 | ACM (radio) | 727 | 72F | MS? | unverified |
 | APIM (SYNC) | 7D0 | 7D8 | MS? | unverified |
 | IPC (instrument cluster) | 720 | 728 | ? | unverified |
+| TCM (PowerShift) | 7E1 | 7E9 | HS? | unverified |
+| ABS | 760 | 768 | HS? | unverified |
+| RCM (airbags) | 737 | 73F | HS? | unverified |
+| PSCM (steering) | 730 | 738 | HS? | unverified |
+| HVAC | 733 | 73B | ? | unverified |
+| GWM (gateway, may not exist) | 716 | 71E | ? | unverified |
+| DDM / PDM (doors) | 740 / 741 | 748 / 749 | MS? | unverified |
+| PAM (parking aid) | 736 | 73E | ? | unverified |
+
+The same list lives in `dtc::CANDIDATES` (`src/dtc.rs`); keep them in sync.
 
 Update the table once a module has responded on the real car, with the date and the
 bus.
@@ -88,6 +98,7 @@ cargo fmt                   # formatting (rustfmt.toml: max_width = 120)
 cargo clippy                # lint
 cargo run -- --mock connect --probe
 cargo run -- --mock --data-dir /tmp/fd battery --crank --seconds 8
+cargo run -- --mock --data-dir /tmp/fd dtc --bus ms
 cargo run -- check "14 FF FF FF"     # must print REJECTED
 ```
 
@@ -100,7 +111,9 @@ ELM327-emulator`, `python3 -m elm -s car`, then `--port /dev/pts/N`).
 |---|---|
 | `src/command.rs` | Allowlist: `AtCommand`, `DiagRequest`, `CanId`, `Command::parse`, `checked_wire` |
 | `src/transport.rs` | `Transport` trait, `SerialTransport`, `MockTransport`, `RawLog` (JSONL), `Logged` |
-| `src/elm.rs` | `Elm`: init (HS/MS), `ATI`/`ATDP`/`ATRV`, response cleaning, ELM errors, baud auto-detection |
+| `src/elm.rs` | `Elm`: init (HS/MS), `target` (`ATSH`/`ATCRA`), `ATI`/`ATDP`/`ATRV`, response cleaning, ELM errors, baud auto-detection |
+| `src/isotp.rs` | Reassembly of ISO-TP frames printed by the ELM (headers on) into messages |
+| `src/dtc.rs` | Candidate modules, DTC decoding (OBD 2-byte, UDS 3-byte + status), NRCs, FTB suggestions, `scan_module` |
 | `src/battery.rs` | Sampling, analysis (rest/crank/charging), persistence, overall assessment |
 | `src/main.rs` | CLI (clap), disclaimer and the `--mock` simulator scenarios |
 | `docs/MANUAL.md` | User manual: keep it up to date when the CLI changes |
@@ -109,20 +122,23 @@ ELM327-emulator`, `python3 -m elm -s car`, then `--port /dev/pts/N`).
 Data flow: `main` → `Elm` → `Logged` (raw log) → `SerialTransport`/`MockTransport`.
 Every transport calls `checked_wire()` before writing.
 
-Data is stored in `fordiag-data/` (git-ignored): `logs/raw-*.jsonl` and
-`battery-<mode>-*.json`.
+Data is stored in `fordiag-data/` (git-ignored): `logs/raw-*.jsonl`,
+`battery-<mode>-*.json` and `dtc-<bus>-*.json`.
 
 ## Status and roadmap
 
 - [x] Phase 1: `connect` (38400 → 115200, init, `ATI`/`ATDP`/`ATRV`, `--probe`, `--bus ms`)
 - [x] Phase 2: `battery --rest/--crank/--charging/--summary`
-- [ ] Phase 3: `dtc`. OBD `03`/`07`/`0A` against the PCM, UDS `19 02 FF` per module
-  with `ATSH`/`ATCRA` (response = request + 8), `--bus ms`, decoding of 3-byte DTCs
-  to P/C/B/U and status bits in plain text. Multi-frame responses (ISO-TP) must be
-  handled.
+- [x] Phase 3: `dtc`. OBD `03`/`07`/`0A` against the PCM, UDS `19 02 FF` per module
+  with `ATSH`/`ATCRA` (response = request + 8), `--bus hs|ms`, ISO-TP reassembly,
+  decoding of 3-byte DTCs to P/C/B/U and status bits in plain text, saved as
+  `dtc-<bus>-*.json`. Tested with the mock and the emulator, not yet on the car.
+- [ ] Ideas (read-only): software versions per module via `22` (`F188`, `F113`, …,
+  unverified), freeze frame (OBD mode `02`, needs an allowlist entry with tests), long
+  voltage log with a key press to mark when the 12 V outlet cuts out.
 - [ ] Phase 4: `report`. Markdown with date, battery tests, DTCs per module and the
   raw log as an attachment.
-- [ ] Not tested against the real car yet. Phases 1 and 2 are tested with the mock
-  and the emulator.
+- [ ] Not tested against the real car yet. Phases 1–3 are tested with the mock and
+  the emulator.
 
 When the CLI changes, update both `README.md` and `docs/MANUAL.md`.

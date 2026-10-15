@@ -5,7 +5,9 @@
 
 mod battery;
 mod command;
+mod dtc;
 mod elm;
+mod isotp;
 mod transport;
 
 use anyhow::Result;
@@ -63,6 +65,18 @@ enum Cmd {
     },
     /// Battery tests based on the voltage at the OBD connector
     Battery(BatteryArgs),
+    /// Read DTCs (OBD 03/07/0A from the PCM, UDS 19 02 FF from each module)
+    Dtc {
+        /// Bus: hs (500 kbit/s) or ms (125 kbit/s)
+        #[arg(long, value_enum, default_value = "hs")]
+        bus: Bus,
+        /// Only these modules (e.g. --module BCM --module ACM). Default: all candidates
+        #[arg(long = "module", value_name = "NAME")]
+        modules: Vec<String>,
+        /// List the candidate modules and exit
+        #[arg(long)]
+        list: bool,
+    },
     /// Check a command against the allowlist without sending it
     Check {
         /// E.g. "19 02 FF" or "ATSH 7E0"
@@ -106,6 +120,7 @@ enum MockScenario {
     Crank,
     Charging,
     Generic,
+    Dtc,
 }
 
 /// Shown at the bottom of `--help`.
@@ -131,6 +146,7 @@ fn run() -> Result<()> {
         }
         Cmd::Connect { bus, probe } => cmd_connect(&cli, *bus, *probe),
         Cmd::Battery(args) => cmd_battery(&cli, args),
+        Cmd::Dtc { bus, modules, list } => cmd_dtc(&cli, *bus, modules, *list),
     }
 }
 
@@ -386,6 +402,140 @@ fn battery_summary(cli: &Cli) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
+// dtc
+// ---------------------------------------------------------------------------
+
+fn cmd_dtc(cli: &Cli, bus: Bus, names: &[String], list: bool) -> Result<()> {
+    if list {
+        println!("Candidate modules (ALL ADDRESSES UNVERIFIED for this car):");
+        for m in dtc::CANDIDATES {
+            println!(
+                "  {:<5} {:03X} → {:03X}  bus {:<2}  {}",
+                m.name,
+                m.request,
+                m.request + 8,
+                m.likely_bus,
+                m.description
+            );
+        }
+        return Ok(());
+    }
+
+    let modules: Vec<&dtc::Module> = if names.is_empty() {
+        dtc::CANDIDATES.iter().collect()
+    } else {
+        names
+            .iter()
+            .map(|n| {
+                dtc::find_module(n).ok_or_else(|| anyhow::anyhow!("unknown module \"{n}\" (see `fordiag dtc --list`)"))
+            })
+            .collect::<Result<_>>()?
+    };
+
+    let switch = match bus {
+        Bus::Hs => "HS",
+        Bus::Ms => "MS",
+    };
+    wait_enter(
+        cli,
+        &format!(
+            "DTC READ ({switch}-CAN): Set the switch on the cable to {switch}. Ignition ON, engine OFF.\n\
+             This only reads; nothing is cleared. Takes about 1 s per module."
+        ),
+    )?;
+
+    let (mut elm, log) = open(cli, MockScenario::Dtc)?;
+    elm.init(bus)?;
+    elm.prepare_for_dtc()?;
+    let started = chrono::Local::now();
+
+    let mut results = Vec::new();
+    for m in modules {
+        // OBD modes 03/07/0A are only meaningful for the engine control module.
+        let include_obd = m.name == "PCM";
+        let r = dtc::scan_module(&mut elm, m, include_obd)?;
+        print_module(&r);
+        results.push(r);
+    }
+
+    let responded: Vec<&str> = results
+        .iter()
+        .filter(|r| r.responded())
+        .map(|r| r.name.as_str())
+        .collect();
+    let silent: Vec<&str> = results
+        .iter()
+        .filter(|r| !r.responded())
+        .map(|r| r.name.as_str())
+        .collect();
+    println!(
+        "\nResponded on {switch}-CAN: {}",
+        if responded.is_empty() {
+            "none".into()
+        } else {
+            responded.join(", ")
+        }
+    );
+    println!(
+        "No response:        {}",
+        if silent.is_empty() {
+            "none".into()
+        } else {
+            silent.join(", ")
+        }
+    );
+    if responded.is_empty() {
+        println!("  ! Nothing answered. Is the ignition on, and is the cable switch on {switch}?");
+    }
+    println!(
+        "\nNote: DTC meanings are not included. Look them up in FORScan or Ford documentation.\n\
+         Failure-type texts are generic SAE suggestions and must be checked against Ford documentation."
+    );
+
+    let scan = dtc::DtcScan {
+        started,
+        source: elm.describe(),
+        bus: switch.to_lowercase(),
+        modules: results,
+    };
+    let path = scan.save(&cli.data_dir)?;
+    println!("\nResult saved: {}", path.display());
+    println!("Raw log:      {}", log.path().display());
+    Ok(())
+}
+
+fn print_module(r: &dtc::ModuleResult) {
+    let tag = if r.responded() { "responded" } else { "no response" };
+    println!(
+        "\n== {} ({} → {}) – {} [{}] ==",
+        r.name, r.request_id, r.response_id, r.description, tag
+    );
+    for read in &r.reads {
+        match &read.outcome {
+            dtc::Outcome::NoResponse => println!("  {:<20} no response", read.label),
+            dtc::Outcome::Negative { nrc, meaning } => {
+                println!("  {:<20} negative response 0x{nrc:02X} ({meaning})", read.label)
+            }
+            dtc::Outcome::Error { message } => println!("  {:<20} error: {message}", read.label),
+            dtc::Outcome::Dtcs { dtcs } if dtcs.is_empty() => println!("  {:<20} no DTCs", read.label),
+            dtc::Outcome::Dtcs { dtcs } => {
+                println!("  {:<20} {} DTC(s):", read.label, dtcs.len());
+                for d in dtcs {
+                    let mut line = format!("    {:<10} {}", d.display(), dtc::code_category(&d.code));
+                    if let Some(f) = d.ftb.and_then(dtc::ftb_suggestion) {
+                        line += &format!(", type: {f} (suggestion)");
+                    }
+                    if let Some(st) = d.status {
+                        line += &format!(", status 0x{st:02X} [{}]", dtc::status_text(st).join(", "));
+                    }
+                    println!("{line}");
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Simulator for --mock
 // ---------------------------------------------------------------------------
 
@@ -420,5 +570,19 @@ fn mock_for(scenario: MockScenario) -> MockTransport {
             }
         })),
         MockScenario::Generic => m.on("0100", "SEARCHING...\r7E8 06 41 00 BE 3F A8 13\r\r"),
+        // Made-up example data; the codes mean nothing in particular.
+        MockScenario::Dtc => m
+            .with_diag_default("NO DATA\r\r")
+            .on_target("7E0", "03", "7E8 02 43 00\r\r")
+            .on_target("7E0", "07", "7E8 04 47 01 05 63\r\r")
+            .on_target("7E0", "0A", "7E8 02 4A 00\r\r")
+            .on_target("7E0", "1902FF", "7E8 03 59 02 FF\r\r")
+            .on_target(
+                "726",
+                "1902FF",
+                "72E 10 0F 59 02 FF F0 03 16\r72E 21 08 92 00 00 28 91 17\r72E 22 62 28 AA AA AA AA AA\r\r",
+            )
+            .on_target("727", "1902FF", "72F 03 7F 19 31\r\r")
+            .on_target("720", "1902FF", "728 07 59 02 FF C1 00 00 2F\r\r"),
     }
 }

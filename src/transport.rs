@@ -116,6 +116,10 @@ pub struct MockTransport {
     start: Instant,
     latency: Duration,
     sent: Rc<RefCell<Vec<String>>>,
+    /// The CAN ID last set with `ATSH`, so responses can depend on the target.
+    header: Option<String>,
+    /// Response to diagnostic requests that have no recorded answer.
+    diag_default: Option<String>,
 }
 
 impl Default for MockTransport {
@@ -133,6 +137,8 @@ impl MockTransport {
             start: Instant::now(),
             latency: Duration::ZERO,
             sent: Rc::new(RefCell::new(Vec::new())),
+            header: None,
+            diag_default: None,
         }
     }
 
@@ -156,6 +162,17 @@ impl MockTransport {
             .entry(wire.to_string())
             .or_default()
             .push_back(response.to_string());
+        self
+    }
+
+    /// Add a response for `wire` that only applies while `ATSH<header>` is active.
+    pub fn on_target(self, header: &str, wire: &str, response: &str) -> Self {
+        self.on(&format!("{header}|{wire}"), response)
+    }
+
+    /// Response to diagnostic requests without a recorded answer (e.g. `NO DATA`).
+    pub fn with_diag_default(mut self, response: &str) -> Self {
+        self.diag_default = Some(response.to_string());
         self
     }
 
@@ -202,7 +219,26 @@ impl Transport for MockTransport {
             }
         }
 
-        let Some(queue) = self.responses.get_mut(&wire) else {
+        if let Some(h) = wire.strip_prefix("ATSH") {
+            self.header = Some(h.to_string());
+        }
+
+        // Look for a target-specific response first, then a general one.
+        let targeted = self.header.as_ref().map(|h| format!("{h}|{wire}"));
+        let key = match targeted {
+            Some(k) if self.responses.contains_key(&k) => k,
+            _ => wire.clone(),
+        };
+        let Some(queue) = self.responses.get_mut(&key) else {
+            // Setting header, filter or timeout always succeeds on a real ELM.
+            if ["ATSH", "ATCRA", "ATST"].iter().any(|p| wire.starts_with(p)) {
+                return Ok("OK\r\r".to_string());
+            }
+            if !wire.starts_with("AT") {
+                if let Some(d) = &self.diag_default {
+                    return Ok(d.clone());
+                }
+            }
             return Ok("?\r\r".to_string());
         };
         let resp = if queue.len() > 1 {

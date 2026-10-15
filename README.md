@@ -46,6 +46,8 @@ The binary ends up in `target/release/fordiag`.
 | `fordiag battery --crank [--seconds 15]` | Lowest voltage while you crank the engine |
 | `fordiag battery --charging [--minutes 3 \| --seconds N]` | Charging voltage: min/max/mean and trend |
 | `fordiag battery --summary` | Overall assessment of the latest saved tests |
+| `fordiag dtc [--bus hs\|ms] [--module NAME]` | Reads DTCs: OBD `03`/`07`/`0A` from the PCM and UDS `19 02 FF` from each candidate module. Never clears anything. |
+| `fordiag dtc --list` | Lists the candidate modules (addresses unverified) |
 | `fordiag check "<command>"` | Checks a command against the allowlist **without** sending it |
 
 Global flags: `--port /dev/ttyUSB0`, `--baud 38400`, `--mock` (built-in simulator),
@@ -63,6 +65,8 @@ fordiag battery --rest                  # car has been parked for several hours
 fordiag battery --crank                 # start the engine when "START NOW" appears
 fordiag battery --charging              # engine idling for 3 minutes
 fordiag battery --summary
+fordiag dtc --bus hs                    # switch on HS, ignition on, engine off
+fordiag dtc --bus ms                    # switch on MS
 ```
 
 See the [manual](docs/MANUAL.md) for what to do physically before each test and how
@@ -73,6 +77,7 @@ to interpret the results.
 * `fordiag-data/logs/raw-*.jsonl`: raw log of all communication (sent and
   received) with timestamps
 * `fordiag-data/battery-*.json`: results and every measurement from the battery tests
+* `fordiag-data/dtc-*.json`: DTC scan results per module, with raw responses
 
 ## Testing against an ELM327 emulator (optional)
 
@@ -88,13 +93,15 @@ fordiag --port /dev/pts/3 connect --probe
 * `transport.rs`: `Transport` trait, `SerialTransport`, `MockTransport` and raw log
 * `elm.rs`: init, response parsing and baud auto-detection
 * `battery.rs`: voltage sampling and analysis
+* `isotp.rs`: reassembly of multi-frame (ISO-TP) responses
+* `dtc.rs`: candidate modules, DTC decoding and module scans
 * `main.rs`: CLI and the `--mock` simulator
 
 ## Status
 
 - [x] Phase 1: connection
 - [x] Phase 2: battery status
-- [ ] Phase 3: DTCs (`fordiag dtc`)
+- [x] Phase 3: DTCs (`fordiag dtc`), not yet tested on the car
 - [ ] Phase 4: report (`fordiag report`)
 
 ## License

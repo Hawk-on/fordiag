@@ -60,14 +60,12 @@ impl CanId {
         }
     }
 
-    #[allow(dead_code)] // used in phase 3 (DTCs)
     pub fn value(self) -> u16 {
         self.0
     }
 
     /// Usual response address for physical addressing: request + 8.
     /// Does not apply to the functional address 0x7DF, and 0x7F8–0x7FF have no +8.
-    #[allow(dead_code)] // used in phase 3 (DTCs)
     pub fn response_id(self) -> Option<CanId> {
         if self.0 == 0x7DF {
             return None;

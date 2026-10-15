@@ -1,7 +1,7 @@
 //! High-level ELM327 API: init, version, protocol, voltage and diagnostic
 //! requests. Interprets the raw responses from the transport layer.
 
-use crate::command::{AtCommand, Command, DiagRequest, Protocol, ProtocolBConfig};
+use crate::command::{AtCommand, CanId, Command, DiagRequest, Protocol, ProtocolBConfig};
 use crate::transport::{RawLog, SerialTransport, Transport, TransportError};
 use anyhow::{Result, anyhow, bail};
 use std::time::Duration;
@@ -112,6 +112,26 @@ impl Elm {
             }
         }
         Ok(version)
+    }
+
+    /// Prepare for DTC reading: automatic ISO-TP formatting on (`ATCAF1`, also
+    /// the default) and a longer response timeout (`ATST64` = 400 ms) so slow
+    /// modules are not reported as silent.
+    pub fn prepare_for_dtc(&mut self) -> Result<()> {
+        self.at_ok(AtCommand::CanAutoFormatOn)?;
+        self.at_ok(AtCommand::Timeout(0x64))
+    }
+
+    /// Address one module: requests go to `request` (`ATSH`), and only
+    /// responses from `request + 8` are received (`ATCRA`). Returns the
+    /// response ID.
+    pub fn target(&mut self, request: CanId) -> Result<CanId> {
+        let response = request
+            .response_id()
+            .ok_or_else(|| anyhow!("{request} has no physical response address"))?;
+        self.at_ok(AtCommand::SetHeader(request))?;
+        self.at_ok(AtCommand::ReceiveFilter(response))?;
+        Ok(response)
     }
 
     pub fn identify(&mut self) -> Result<String> {
