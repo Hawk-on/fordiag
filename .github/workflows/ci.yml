@@ -52,13 +52,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --locked --release
       - name: Install ELM327-emulator in a virtual environment
-        # The emulator is only published as a source package. Pin the tested
-        # version, and keep setuptools below 81 in the build environment because
-        # its setup.py may still import pkg_resources (removed in setuptools 81).
+        # The emulator is only published as a source package, and its setup.py
+        # appends "-$GITHUB_RUN_NUMBER" to the version when that variable is set
+        # (as it is in every GitHub Actions job). pip then sees a version that does
+        # not match the file name, discards 4.0.0 and falls back to an old release
+        # that no longer builds. So build it without that variable.
         run: |
           python3 -m venv "$RUNNER_TEMP/venv" || { sudo apt-get update && sudo apt-get install -y python3-venv && python3 -m venv "$RUNNER_TEMP/venv"; }
-          echo "setuptools<81" > "$RUNNER_TEMP/pip-constraints.txt"
-          PIP_CONSTRAINT="$RUNNER_TEMP/pip-constraints.txt" "$RUNNER_TEMP/venv/bin/pip" install ELM327-emulator==4.0.0
+          env -u GITHUB_RUN_NUMBER "$RUNNER_TEMP/venv/bin/pip" install ELM327-emulator==4.0.0
       - name: End-to-end test (made-up Ford scenario)
         run: PYTHON="$RUNNER_TEMP/venv/bin/python" tools/ci_emulator.sh target/release/fordiag
 
