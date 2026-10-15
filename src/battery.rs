@@ -68,10 +68,10 @@ pub fn sample_voltage(
                 }
             }
         }
-        if let Some(iv) = interval {
-            if let Some(rest) = iv.checked_sub(t0.elapsed()) {
-                std::thread::sleep(rest);
-            }
+        if let Some(iv) = interval
+            && let Some(rest) = iv.checked_sub(t0.elapsed())
+        {
+            std::thread::sleep(rest);
         }
     }
     if samples.is_empty() {
@@ -309,7 +309,9 @@ pub fn analyse_crank(samples: &[Sample]) -> CrankResult {
             "Gap of {gap} ms in the measurements – the ELM chip may have lost power while cranking. The minimum may then be lower than measured."
         ));
     }
-    if crank_detected && !(after >= 13.0) {
+    // Written this way so that a missing value (NaN) also counts as "not running".
+    let engine_running_after = after >= 13.0;
+    if crank_detected && !engine_running_after {
         warnings.push("The voltage after cranking is below 13 V – did the engine start, and is the alternator charging? (Ford smart charging can also keep the voltage low for a while.)".into());
     }
 
@@ -318,7 +320,7 @@ pub fn analyse_crank(samples: &[Sample]) -> CrankResult {
         min: min_sample.volts,
         min_t_ms: min_sample.t_ms,
         after,
-        engine_running_after: after >= 13.0,
+        engine_running_after,
         mean_interval_ms,
         verdict,
         warnings,

@@ -32,8 +32,9 @@ use transport::{Logged, MockTransport, RawLog};
     after_help = DISCLAIMER
 )]
 struct Cli {
-    /// Serial port (or pseudo-terminal from an ELM327 emulator)
-    #[arg(long, global = true, default_value = "/dev/ttyUSB0")]
+    /// Serial port (or pseudo-terminal from an ELM327 emulator). On Windows, check
+    /// Device Manager for the COM port number.
+    #[arg(long, global = true, default_value = DEFAULT_PORT)]
     port: String,
 
     /// Force baud rate (otherwise: try 38400, then 115200)
@@ -143,6 +144,12 @@ enum MockScenario {
     Generic,
     Dtc,
 }
+
+/// Default serial port: the usual name of a USB serial adapter on each platform.
+#[cfg(not(windows))]
+const DEFAULT_PORT: &str = "/dev/ttyUSB0";
+#[cfg(windows)]
+const DEFAULT_PORT: &str = "COM3";
 
 /// Shown at the bottom of `--help`.
 const DISCLAIMER: &str = "DISCLAIMER: Use at your own risk. fordiag is provided \"as is\", without warranty of any kind \

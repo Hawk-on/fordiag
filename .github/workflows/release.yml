@@ -1,0 +1,105 @@
+# Continuous delivery: push a tag such as v0.1.0 and this workflow builds and
+# publishes a GitHub Release with
+#   - a .deb package for Kubuntu / Ubuntu 26.04 (amd64),
+#   - a plain Linux tarball,
+#   - optionally a Windows x64 zip (that job may fail without stopping the release),
+#   - SHA-256 checksums.
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# The tag must match the version in Cargo.toml.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)build, e.g. v0.1.0"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  TAG: ${{ inputs.tag || github.ref_name }}
+
+jobs:
+  linux:
+    name: Linux (.deb for Kubuntu 26.04 + tarball)
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - name: Tag must match Cargo.toml version
+        run: |
+          version="$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
+          if [ "v$version" != "$TAG" ]; then
+            echo "Tag $TAG does not match Cargo.toml version $version"; exit 1
+          fi
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deb
+      - name: Tests (including the safety tests)
+        run: cargo test --locked
+      - name: Build .deb
+        run: cargo deb --locked
+      - name: Check the package
+        run: |
+          sudo dpkg -i target/debian/fordiag_*.deb
+          fordiag check "14 FF FF FF" | grep -q '^REJECTED'
+          sudo dpkg -r fordiag
+      - name: Tarball and checksums
+        run: |
+          mkdir -p dist "fordiag-$TAG-x86_64-linux"
+          cp target/release/fordiag README.md LICENSE docs/MANUAL.md "fordiag-$TAG-x86_64-linux/"
+          tar czf "dist/fordiag-$TAG-x86_64-linux.tar.gz" "fordiag-$TAG-x86_64-linux"
+          cp target/debian/fordiag_*.deb dist/
+          (cd dist && sha256sum * > SHA256SUMS-linux.txt)
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          name: fordiag ${{ env.TAG }}
+          generate_release_notes: true
+          body: |
+            Read-only diagnostic CLI for the Ford S-Max Mk2 via ELM327.
+
+            **Kubuntu / Ubuntu 26.04:** download the `.deb` and install it with
+            `sudo apt install ./fordiag_*.deb`. Add yourself to the `dialout` group to use the cable.
+
+            **Disclaimer:** use at your own risk. Provided "as is", without warranty (see LICENSE).
+            Not affiliated with Ford. Never operate it while driving.
+          files: dist/*
+
+  windows:
+    name: Windows x64 (optional)
+    runs-on: windows-latest
+    needs: linux
+    # Optional: a Windows failure does not stop or undo the Linux release.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked
+      - run: cargo build --locked --release
+      - name: Zip and checksum
+        shell: pwsh
+        run: |
+          $name = "fordiag-$env:TAG-x86_64-windows"
+          New-Item -ItemType Directory -Force $name, dist | Out-Null
+          Copy-Item target\release\fordiag.exe, README.md, LICENSE, docs\MANUAL.md $name\
+          Compress-Archive -Path "$name\*" -DestinationPath "dist\$name.zip" -Force
+          $hash = (Get-FileHash "dist\$name.zip" -Algorithm SHA256).Hash.ToLower()
+          "$hash  $name.zip" | Out-File -Encoding ascii dist\SHA256SUMS-windows.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          files: dist/*

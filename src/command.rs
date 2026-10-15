@@ -44,6 +44,7 @@ pub enum Forbidden {
     #[error("invalid hex: \"{0}\"")]
     BadHex(String),
     #[error("service 0x{0:02X} is FORBIDDEN ({1}) – use FORScan if you really need this")]
+    #[allow(clippy::enum_variant_names)] // "Forbidden::ForbiddenService" reads clearly in errors
     ForbiddenService(u8, &'static str),
     #[error("service 0x{0:02X} is not on the allowlist")]
     NotAllowed(u8),
@@ -187,13 +188,13 @@ pub enum AtCommand {
 
 impl AtCommand {
     /// The text sent to the ELM327 (without CR).
-    pub fn to_wire(&self) -> String {
+    pub fn to_wire(self) -> String {
         match self {
             AtCommand::Reset => "ATZ".into(),
             AtCommand::EchoOff => "ATE0".into(),
             AtCommand::LinefeedsOff => "ATL0".into(),
-            AtCommand::Spaces(on) => format!("ATS{}", *on as u8),
-            AtCommand::Headers(on) => format!("ATH{}", *on as u8),
+            AtCommand::Spaces(on) => format!("ATS{}", on as u8),
+            AtCommand::Headers(on) => format!("ATH{}", on as u8),
             AtCommand::SetProtocol(p) => format!("ATSP{}", p.code()),
             AtCommand::ProtocolB(cfg) => {
                 let (a, b) = cfg.bytes();
@@ -324,8 +325,8 @@ const FORBIDDEN_SERVICES: &[(u8, &str)] = &[
 
 impl DiagRequest {
     /// The bytes of the request.
-    pub fn to_bytes(&self) -> Vec<u8> {
-        match *self {
+    pub fn to_bytes(self) -> Vec<u8> {
+        match self {
             DiagRequest::Obd(o) => match o {
                 ObdRequest::CurrentData { pid } => vec![0x01, pid],
                 ObdRequest::StoredDtcs => vec![0x03],
@@ -346,7 +347,7 @@ impl DiagRequest {
     }
 
     /// The text sent to the ELM327, e.g. `1902FF`.
-    pub fn to_wire(&self) -> String {
+    pub fn to_wire(self) -> String {
         self.to_bytes().iter().map(|b| format!("{b:02X}")).collect()
     }
 
@@ -420,7 +421,7 @@ pub enum Command {
 }
 
 impl Command {
-    pub fn to_wire(&self) -> String {
+    pub fn to_wire(self) -> String {
         match self {
             Command::At(a) => a.to_wire(),
             Command::Diag(d) => d.to_wire(),

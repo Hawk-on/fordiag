@@ -1,5 +1,7 @@
 # fordiag
 
+[![CI](https://github.com/Hawk-on/fordiag/actions/workflows/ci.yml/badge.svg)](https://github.com/Hawk-on/fordiag/actions/workflows/ci.yml)
+
 Read-only diagnostic CLI for the Ford S-Max Mk2 (2.0 TDCi) using an ELM327 USB cable.
 
 **The tool can only read.** Everything sent to the cable must be a variant of the
@@ -27,6 +29,23 @@ Use FORScan for anything like that.
 * [`docs/MANUAL.md`](docs/MANUAL.md): the full user manual (every command, interpretation, troubleshooting)
 * [`docs/BACKGROUND.md`](docs/BACKGROUND.md): what other S-Max Mk2 / Galaxy / Mondeo owners have found (recall 18P11, BMS and charging), with sources
 * [`CLAUDE.md`](CLAUDE.md): development guide (safety rules, conventions, architecture, roadmap)
+
+## Install
+
+**Kubuntu / Ubuntu 26.04 (amd64):** download `fordiag_<version>-1_amd64.deb` from
+[Releases](https://github.com/Hawk-on/fordiag/releases) and install it:
+
+```sh
+sudo apt install ./fordiag_0.1.0-1_amd64.deb
+sudo usermod -aG dialout $USER     # access to /dev/ttyUSB0; log out and in again
+```
+
+The package also works on Ubuntu 22.04 and later and on Debian 12 and later (it only
+needs glibc 2.34). The manual is installed in `/usr/share/doc/fordiag/`.
+
+**Windows 10/11 (x64, optional):** a `fordiag-<version>-x86_64-windows.zip` may also be
+attached to the release. Use `--port COM3` (check Device Manager for the number).
+Windows builds are tested in CI but not on a real car.
 
 ## Build and test
 
@@ -118,6 +137,22 @@ read-only commands and reads the results. See the manual, chapter 13.
 - [x] Phase 2: battery status
 - [x] Phase 3: DTCs (`fordiag dtc`), not yet tested on the car
 - [x] Phase 4: report (`fordiag report`)
+
+## CI/CD
+
+- **CI** (`.github/workflows/ci.yml`, on every push and pull request, Ubuntu 26.04):
+  `cargo fmt`, `clippy -D warnings`, all tests including the safety tests, the
+  end-to-end test against ELM327-emulator (`tools/ci_emulator.sh`), and a `.deb`
+  that is installed and smoke-tested. The `.deb` is kept as a build artifact.
+- **Windows (optional)** (`.github/workflows/windows.yml`): started by hand under
+  Actions; tests and builds a Windows x64 zip.
+- **Release** (`.github/workflows/release.yml`): pushing a tag `vX.Y.Z` (matching
+  `Cargo.toml`) builds and publishes a GitHub Release with the `.deb`, a Linux
+  tarball, an optional Windows zip and SHA-256 checksums:
+
+  ```sh
+  git tag v0.1.0 && git push origin v0.1.0
+  ```
 
 ## License
 

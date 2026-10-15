@@ -179,7 +179,7 @@ pub fn parse_obd_dtcs(data: &[u8]) -> Result<Vec<Dtc>, String> {
         ftb: None,
         status: None,
     };
-    if data.len() % 2 == 0 {
+    if data.len().is_multiple_of(2) {
         let count = data[1] as usize;
         let pairs = &data[2..];
         if pairs.len() < count * 2 {
@@ -198,7 +198,7 @@ pub fn parse_uds_dtcs(data: &[u8]) -> Result<Vec<Dtc>, String> {
         return Err("not a 59 02 response".into());
     }
     let records = &data[3..];
-    if records.len() % 4 != 0 {
+    if !records.len().is_multiple_of(4) {
         return Err(format!("{} record bytes is not a multiple of 4", records.len()));
     }
     Ok(records

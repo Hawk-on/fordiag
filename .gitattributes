@@ -1,0 +1,4 @@
+# Keep LF line endings everywhere (also on Windows CI runners), so that
+# fixtures and the source-code safety tripwires see the same bytes.
+* text=auto eol=lf
+*.deb binary

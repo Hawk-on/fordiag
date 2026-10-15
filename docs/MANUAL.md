@@ -52,7 +52,22 @@ This manual covers version 0.1 (phases 1–4: connection, battery, DTCs and repo
   sudo usermod -aG dialout $USER   # if not; then log out and back in
   ```
 
-### Building
+### Installing
+
+**From a release (recommended on Kubuntu 26.04):** download the `.deb` from the
+project's GitHub Releases page and install it with
+`sudo apt install ./fordiag_<version>-1_amd64.deb`. The binary goes to
+`/usr/bin/fordiag`, and this manual to `/usr/share/doc/fordiag/`. Remove it with
+`sudo apt remove fordiag`. Check the download against `SHA256SUMS-linux.txt` with
+`sha256sum -c SHA256SUMS-linux.txt --ignore-missing`.
+
+**Windows 10/11 (x64, optional):** unzip `fordiag-<version>-x86_64-windows.zip` and run
+`fordiag.exe` from a terminal. The default port on Windows is `COM3`; find the right
+one in Device Manager under "Ports (COM & LPT)" and pass it with `--port COM5` or
+similar. The `dialout` group does not apply. The emulator test and the Claude Code
+skill assume Linux.
+
+### Building from source
 
 ```sh
 cargo build --release
@@ -99,7 +114,7 @@ These flags can go before or after the command name.
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--port <PATH>` | `/dev/ttyUSB0` | Serial port, or a pseudo-terminal from an emulator (e.g. `/dev/pts/3`) |
+| `--port <PATH>` | `/dev/ttyUSB0` (Windows: `COM3`) | Serial port, or a pseudo-terminal from an emulator (e.g. `/dev/pts/3`) |
 | `--baud <N>` | (auto) | Force a baud rate. Without it, fordiag tries 38400 and then 115200. |
 | `--mock` | off | Use the built-in simulator instead of cable and car |
 | `--replay <LOG>` | off | Replay a recorded raw log instead of using the cable (see [chapter 12](#12-testing-without-a-car)) |

@@ -106,6 +106,13 @@ cargo run -- --data-dir /tmp/fd report --vehicle "Test"
 cargo run -- check "14 FF FF FF"     # must print REJECTED
 ```
 
+CI/CD (GitHub Actions, `.github/workflows/`): `ci.yml` (fmt, clippy `-D warnings`,
+tests, `tools/ci_emulator.sh` against the Ford emulator scenario, `.deb` build +
+install check) on `ubuntu-26.04` = Kubuntu 26.04; `windows.yml` (optional, manual);
+`release.yml` on tags `vX.Y.Z` (must match `Cargo.toml`): `.deb`, tarball, optional
+Windows zip, checksums. Keep CI green: run `cargo fmt --check`, `cargo clippy
+--all-targets -- -D warnings`, `cargo test` and `actionlint` before pushing.
+
 The serial layer can be tested against `ELM327-emulator` (`pip install
 ELM327-emulator`, `python3 -m elm -s car`, then `--port /dev/pts/N`), or against the
 Ford-like scenario with `python3 tools/ford_emulator.py`. Do not use `pkill -f` with a
@@ -128,6 +135,8 @@ pattern that also matches your own shell command line when stopping it.
 | `src/main.rs` | CLI (clap), disclaimer and the `--mock` simulator scenarios |
 | `docs/MANUAL.md` | User manual: keep it up to date when the CLI changes |
 | `.claude/skills/fordiag/SKILL.md` | Claude Code skill for running fordiag with the owner on their PC |
+| `tools/ci_emulator.sh` | CI end-to-end test of the serial layer against the Ford emulator scenario |
+| `.github/workflows/` | CI (`ci.yml`), optional Windows (`windows.yml`), release (`release.yml`) |
 | `tools/ford_emulator.py` | ELM327-emulator launcher with the made-up `ford_cd4` scenario |
 | `docs/BACKGROUND.md` | Research notes and sources from other owners (unverified) |
 

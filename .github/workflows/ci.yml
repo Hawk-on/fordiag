@@ -1,0 +1,84 @@
+# Continuous integration: lint, tests (including the safety tests), an
+# end-to-end test against ELM327-emulator, and a .deb package for Kubuntu 26.04.
+name: CI
+
+on:
+  push:
+    branches: [main, "claude/**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    name: Format and clippy
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+
+  test:
+    name: Tests (unit, replay, safety, end-to-end)
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked
+      # The allowlist check must reject a forbidden service from the real binary.
+      - name: Smoke test of the allowlist
+        run: cargo run --locked -q -- check "14 FF FF FF" | grep -q '^REJECTED'
+
+  emulator:
+    name: Serial layer against ELM327-emulator
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --locked --release
+      - name: Install ELM327-emulator in a virtual environment
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv" || { sudo apt-get update && sudo apt-get install -y python3-venv && python3 -m venv "$RUNNER_TEMP/venv"; }
+          "$RUNNER_TEMP/venv/bin/pip" install --quiet ELM327-emulator
+      - name: End-to-end test (made-up Ford scenario)
+        run: PYTHON="$RUNNER_TEMP/venv/bin/python" tools/ci_emulator.sh target/release/fordiag
+
+  deb:
+    name: .deb package (Kubuntu / Ubuntu 26.04, amd64)
+    runs-on: ubuntu-26.04
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deb
+      - run: cargo deb --locked
+      - name: Install and run the package
+        run: |
+          sudo dpkg -i target/debian/fordiag_*.deb
+          fordiag --version
+          fordiag check "14 FF FF FF" | grep -q '^REJECTED'
+          fordiag check "19 02 FF" | grep -q '^ALLOWED'
+          sudo dpkg -r fordiag
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fordiag-deb
+          path: target/debian/fordiag_*.deb
+          if-no-files-found: error

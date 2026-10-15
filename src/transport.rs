@@ -211,12 +211,12 @@ impl Transport for MockTransport {
             std::thread::sleep(self.latency);
         }
 
-        if wire == "ATRV" {
-            if let Some(f) = self.voltage.as_mut() {
-                let v = f(self.start.elapsed());
-                // A real ELM327 replies with one decimal.
-                return Ok(format!("{v:.1}V\r\r"));
-            }
+        if wire == "ATRV"
+            && let Some(f) = self.voltage.as_mut()
+        {
+            let v = f(self.start.elapsed());
+            // A real ELM327 replies with one decimal.
+            return Ok(format!("{v:.1}V\r\r"));
         }
 
         if let Some(h) = wire.strip_prefix("ATSH") {
@@ -234,10 +234,10 @@ impl Transport for MockTransport {
             if ["ATSH", "ATCRA", "ATST"].iter().any(|p| wire.starts_with(p)) {
                 return Ok("OK\r\r".to_string());
             }
-            if !wire.starts_with("AT") {
-                if let Some(d) = &self.diag_default {
-                    return Ok(d.clone());
-                }
+            if !wire.starts_with("AT")
+                && let Some(d) = &self.diag_default
+            {
+                return Ok(d.clone());
             }
             return Ok("?\r\r".to_string());
         };
