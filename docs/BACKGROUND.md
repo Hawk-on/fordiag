@@ -33,6 +33,13 @@ fuse, not a new sensor ([talkford: drain since recall][tf-drain]).
 **Relevance here:** This car (built about early 2016) falls inside the build window,
 and the sensor in question is the one the BMS uses to estimate the state of charge.
 
+**Status for this car (checked 2026-10-15 on ford.no/brukerstoette/tilbakekallinger):**
+the result was "Ingen tilbakekallinger" (no recalls) and "Intet kundetilfredshetsprogram"
+(no customer satisfaction programme). The lookup most likely only lists outstanding
+recalls, so 18P11 has **probably already been done**. A Ford dealer can confirm this from
+the service history, and the fused intermediate cable at the negative terminal is a
+physical sign.
+
 **Action:**
 - Check whether 18P11 has been done. Use the VIN on Ford's recall page, or ask a Ford
   dealer. The service history may also show it.
