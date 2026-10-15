@@ -163,6 +163,40 @@ The battery tests and the DTCs from the BCM (phase 3) should help tell these apa
 
 ---
 
+## 7. Related open-source projects (LLM + car diagnostics)
+
+Checked 2026-10-15. None of them target the S-Max or read Ford MS-CAN modules over
+UDS the way fordiag does, but they are useful for comparison.
+
+| Project | What it is | Safety model | Notes |
+|---|---|---|---|
+| [petrpatek/obd2-mcp-server][p-mcp] (Python, MIT) | MCP server that lets Claude read DTCs, live data and freeze frames via an ELM327 | Has `clear_dtc` behind a confirmation | Built around a 2010 Ford Focus CC. The roof module showed **no** DTCs, while the real codes were on the passenger door module. Has a `--mock` mode and pytest tests. |
+| [Bitvea blog: Claude MCP + OBD-II][bitvea] | Write-up of the project above | Read-only MCP tools with typed inputs | "python-obd doesn't natively scan Ford's MS-CAN bus." The DTC database is "scraped, not authoritative". "Claude can hallucinate … verify anything it says against actual service documentation." |
+| [speed785/open-mechanic][open-mech] (Python, MIT) | OBD-II reader plus a one-shot Claude diagnosis | Clearing allowed with `confirmed=True` | Standard OBD-II only; injects a mandatory disclaimer into the AI output. |
+| [castlebbs/vehicle-diagnostic-assistant][castle] | Hackathon project: MCP server on the OBD dongle itself | Exposes **raw** ELM327 commands to the LLM | The opposite of fordiag's approach. |
+| [CSS-Electronics/can-bus-reverse-engineering-skills][css] | Claude Code skills to decode *broadcast* CAN signals into DBC files | Passive listening | Needs a real CAN interface (not an ELM327). Could in principle find e.g. the battery state of charge broadcast on the bus, but that is outside fordiag (which does not allow monitor mode). |
+| [Libre-Diagnosctic/libre-automotive-diagnostic][libre] (C/Python, AGPL-3.0) | ELM327 tool with brand-specific commands | Not stated | BMW/VW/Renault/Toyota; no Ford. AGPL, so do not copy code into this MIT project. |
+| [Ircama/ELM327-emulator][elm-emu] | The emulator we already use | – | Supports custom dictionaries, per-ECU plugins (`task_ecu_726.py`) and UDS answer tags, so a Ford-like test scenario is possible. |
+
+**Lessons for fordiag:**
+- **Scan every module.** The Focus CC case shows that the module you suspect may have
+  no codes, while the module next to it does. This fits our scan of all candidates.
+- **Keep the LLM out of the write path.** Several projects let the model clear codes
+  (with a confirmation), and one gives it raw commands. fordiag keeps the type-enforced
+  allowlist. If an LLM is ever connected to it, it gets only read commands.
+- **Do not trust scraped code meanings.** This matches rule 8: meanings must come from
+  Ford documentation, marked as suggestions.
+
+[p-mcp]: https://github.com/petrpatek/obd2-mcp-server
+[bitvea]: https://bitvea.com/en/blog/claude-mcp-car-diagnostics-obd2
+[open-mech]: https://github.com/speed785/open-mechanic
+[castle]: https://github.com/castlebbs/vehicle-diagnostic-assistant
+[css]: https://github.com/CSS-Electronics/can-bus-reverse-engineering-skills
+[libre]: https://github.com/Libre-Diagnosctic/libre-automotive-diagnostic
+[elm-emu]: https://github.com/Ircama/ELM327-emulator
+
+---
+
 ## Suggested next steps (in order)
 
 1. Check whether **recall 18P11** has been carried out on this car (VIN on Ford's
