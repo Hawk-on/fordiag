@@ -8,6 +8,7 @@ mod command;
 mod dtc;
 mod elm;
 mod isotp;
+mod replay;
 mod report;
 mod transport;
 
@@ -38,8 +39,13 @@ struct Cli {
     baud: Option<u32>,
 
     /// Use the built-in simulator instead of cable and car
-    #[arg(long, global = true)]
+    #[arg(long, global = true, conflicts_with = "replay")]
     mock: bool,
+
+    /// Replay a recorded raw log (fordiag-data/logs/raw-*.jsonl) instead of using
+    /// the cable. Run the same command with the same options as when it was recorded.
+    #[arg(long, global = true, value_name = "LOG")]
+    replay: Option<PathBuf>,
 
     /// Directory for logs and results
     #[arg(long, global = true, default_value = "fordiag-data")]
@@ -173,6 +179,8 @@ fn open(cli: &Cli, scenario: MockScenario) -> Result<(Elm, RawLog)> {
     let log = RawLog::create(&cli.data_dir.join("logs"))?;
     let inner: Box<dyn transport::Transport> = if cli.mock {
         Box::new(mock_for(scenario))
+    } else if let Some(path) = &cli.replay {
+        Box::new(replay::ReplayTransport::open(path)?)
     } else {
         elm::open_serial(&cli.port, cli.baud, &log)?
     };
@@ -188,7 +196,7 @@ fn log_name(log: &RawLog) -> Option<String> {
 /// Prompt the user and wait for Enter (skipped with `--yes` or `--mock`).
 fn wait_enter(cli: &Cli, prompt: &str) -> Result<()> {
     println!("{prompt}");
-    if cli.yes || cli.mock {
+    if cli.yes || cli.mock || cli.replay.is_some() {
         return Ok(());
     }
     print!("Press Enter when ready … ");

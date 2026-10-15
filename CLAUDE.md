@@ -115,13 +115,14 @@ ELM327-emulator`, `python3 -m elm -s car`, then `--port /dev/pts/N`).
 | `src/elm.rs` | `Elm`: init (HS/MS), `target` (`ATSH`/`ATCRA`), `ATI`/`ATDP`/`ATRV`, response cleaning, ELM errors, baud auto-detection |
 | `src/isotp.rs` | Reassembly of ISO-TP frames printed by the ELM (headers on) into messages |
 | `src/dtc.rs` | Candidate modules, DTC decoding (OBD 2-byte, UDS 3-byte + status), NRCs, FTB suggestions, `scan_module` |
+| `src/replay.rs` | `ReplayTransport`: strict in-order replay of a raw log (`--replay`); regression test over `fixtures/replay/dtc-*.jsonl` (+ `.expected.json`) |
 | `src/report.rs` | Markdown report: `load` (latest results + raw logs) and pure `render` |
 | `src/battery.rs` | Sampling, analysis (rest/crank/charging), persistence, overall assessment |
 | `src/main.rs` | CLI (clap), disclaimer and the `--mock` simulator scenarios |
 | `docs/MANUAL.md` | User manual: keep it up to date when the CLI changes |
 | `docs/BACKGROUND.md` | Research notes and sources from other owners (unverified) |
 
-Data flow: `main` → `Elm` → `Logged` (raw log) → `SerialTransport`/`MockTransport`.
+Data flow: `main` → `Elm` → `Logged` (raw log) → `SerialTransport`/`MockTransport`/`ReplayTransport`.
 Every transport calls `checked_wire()` before writing.
 
 Data is stored in `fordiag-data/` (git-ignored): `logs/raw-*.jsonl`,
@@ -137,6 +138,11 @@ default report output.
   with `ATSH`/`ATCRA` (response = request + 8), `--bus hs|ms`, ISO-TP reassembly,
   decoding of 3-byte DTCs to P/C/B/U and status bits in plain text, saved as
   `dtc-<bus>-*.json`. Tested with the mock and the emulator, not yet on the car.
+- [x] Replay of recorded raw logs (`--replay`) and recordings as regression tests in
+  `fixtures/replay/`. When the owner shares real recordings from the car, add them
+  there (raw log + matching `dtc-*.json` as `.expected.json`), after checking them.
+- [ ] Ford-like scenario for ELM327-emulator (BCM/ACM/APIM on 726/727/7D0).
+- [ ] Claude Code skill around fordiag (read-only), for use on the owner's own PC.
 - [ ] Ideas (read-only): software versions per module via `22` (`F188`, `F113`, …,
   unverified), freeze frame (OBD mode `02`, needs an allowlist entry with tests), long
   voltage log with a key press to mark when the 12 V outlet cuts out.

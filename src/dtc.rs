@@ -286,7 +286,7 @@ pub enum Outcome {
     Error { message: String },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Read {
     pub label: String,
     /// The request as sent, e.g. "1902FF".
@@ -296,7 +296,7 @@ pub struct Read {
     pub raw: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ModuleResult {
     pub name: String,
     pub description: String,

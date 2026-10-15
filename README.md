@@ -51,7 +51,7 @@ The binary ends up in `target/release/fordiag`.
 | `fordiag report [--vehicle "TEXT"] [--no-raw]` | Markdown report from the latest saved results, with raw logs as an appendix |
 | `fordiag check "<command>"` | Checks a command against the allowlist **without** sending it |
 
-Global flags: `--port /dev/ttyUSB0`, `--baud 38400`, `--mock` (built-in simulator),
+Global flags: `--port /dev/ttyUSB0`, `--baud 38400`, `--mock` (built-in simulator), `--replay LOG` (replay a recorded raw log),
 `--data-dir fordiag-data`, `-y/--yes` (do not wait for Enter).
 
 The battery tests only send `ATZ`, `ATE0`, `ATL0` and `ATRV`. None of these go out on
@@ -99,6 +99,7 @@ fordiag --port /dev/pts/3 connect --probe
 * `isotp.rs`: reassembly of multi-frame (ISO-TP) responses
 * `dtc.rs`: candidate modules, DTC decoding and module scans
 * `report.rs`: the Markdown report
+* `replay.rs`: replay of recorded raw logs (`--replay`, regression tests in `fixtures/replay/`)
 * `main.rs`: CLI and the `--mock` simulator
 
 ## Status

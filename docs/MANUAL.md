@@ -101,6 +101,7 @@ These flags can go before or after the command name.
 | `--port <PATH>` | `/dev/ttyUSB0` | Serial port, or a pseudo-terminal from an emulator (e.g. `/dev/pts/3`) |
 | `--baud <N>` | (auto) | Force a baud rate. Without it, fordiag tries 38400 and then 115200. |
 | `--mock` | off | Use the built-in simulator instead of cable and car |
+| `--replay <LOG>` | off | Replay a recorded raw log instead of using the cable (see [chapter 12](#12-testing-without-a-car)) |
 | `--data-dir <DIR>` | `fordiag-data` | Where logs and results are stored (relative to the current directory) |
 | `-y`, `--yes` | off | Do not wait for Enter before measurements |
 | `-h`, `--help` | | Show help (includes the disclaimer) |
@@ -603,6 +604,46 @@ cargo test
 The tests cover the allowlist (all 256 service bytes), response parsing, init
 sequences against `MockTransport`, ISO-TP reassembly, DTC decoding, module scans
 with recorded answers, and the analyses with their thresholds.
+
+### Replaying a recording (`--replay`)
+
+Every run writes a raw log (`fordiag-data/logs/raw-*.jsonl`). `--replay` plays such a
+log back instead of talking to the cable: each command fordiag sends must match the
+next recorded command exactly, and the recorded answer is returned.
+
+```sh
+fordiag --replay fordiag-data/logs/raw-20261018-101500.jsonl dtc --bus ms
+```
+
+- Run the **same command with the same options** as when it was recorded. If fordiag
+  would now send something different, the replay stops with a message saying where
+  it diverged.
+- Useful for `connect` and `dtc`, for example to check that an improved parser
+  interprets an old answer correctly. Battery tests are time-based and cannot be
+  replayed meaningfully, but their JSON files already contain every sample.
+- Results from a replay are labelled `replay of raw-….jsonl`, and the report warns
+  that they are not from a live connection.
+
+### Recordings as regression tests (`fixtures/replay/`)
+
+`cargo test` replays every `fixtures/replay/dtc-*.jsonl`. The bus and the modules
+are taken from the recording itself. If there is a matching `.expected.json` (a
+saved `dtc-*.json` result), the module results must match it exactly.
+
+To add a recording from the car:
+
+```sh
+cp fordiag-data/logs/raw-20261018-101500.jsonl fixtures/replay/dtc-ms-smax-2026-10-18.jsonl
+cp fordiag-data/dtc-ms-20261018-101500.json   fixtures/replay/dtc-ms-smax-2026-10-18.expected.json
+cargo test
+```
+
+The raw log and the result file from the same run belong together (same timestamp).
+Recordings contain no VIN, but check them before committing them to a public
+repository.
+
+The repository currently has two fixtures: an HS scan against ELM327-emulator and an
+MS scan against `--mock`.
 
 ### ELM327 emulator (tests the serial layer)
 

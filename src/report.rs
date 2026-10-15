@@ -97,14 +97,16 @@ fn when(started: &chrono::DateTime<chrono::Local>, source: &str) -> String {
     format!("{} ({})", started.format("%Y-%m-%d %H:%M"), cell(source))
 }
 
-/// True if any of the results came from the simulator.
+/// True if any of the results came from the simulator or from a replayed log,
+/// i.e. not from a live connection to the car.
 fn contains_mock(input: &ReportInput) -> bool {
+    let not_live = |source: &str| source.contains("mock") || source.starts_with("replay");
     let b = &input.battery;
     [&b.rest, &b.crank, &b.charging]
         .into_iter()
         .flatten()
-        .any(|t| t.source.contains("mock"))
-        || input.dtc.iter().any(|s| s.source.contains("mock"))
+        .any(|t| not_live(&t.source))
+        || input.dtc.iter().any(|s| not_live(&s.source))
 }
 
 /// Render the whole report as Markdown.
@@ -134,7 +136,8 @@ pub fn render(input: &ReportInput) -> String {
     if contains_mock(input) {
         let _ = writeln!(
             w,
-            "\n> [!CAUTION]\n> This report contains **simulated data** from `--mock`. It does not describe a real car."
+            "\n> [!CAUTION]\n> This report contains **simulated data** from `--mock` or results re-run with `--replay`. \
+             Check the source of each result; simulated data does not describe a real car."
         );
     }
 
@@ -547,6 +550,7 @@ mod tests {
         };
         assert!(render(&input(battery, vec![])).contains("simulated data"));
         assert!(render(&input(Latest::default(), vec![scan("mock (no car)")])).contains("simulated data"));
+        assert!(render(&input(Latest::default(), vec![scan("replay of raw-x.jsonl")])).contains("simulated data"));
     }
 
     #[test]
