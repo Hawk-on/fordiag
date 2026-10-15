@@ -2,6 +2,11 @@
 name = "fordiag"
 version = "0.1.0"
 edition = "2024"
+description = "Read-only ELM327 diagnostic CLI for the Ford S-Max Mk2"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/Hawk-on/fordiag"
+authors = ["hawk-on"]
 
 [dependencies]
 anyhow = "1.0.104"
@@ -11,3 +16,24 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 serialport = { version = "4.10.1", default-features = false }
 thiserror = "2.0.21"
+
+# Debian/Ubuntu package (Kubuntu 26.04): built with `cargo deb` in CI.
+[package.metadata.deb]
+maintainer = "hawk-on"
+copyright = "2026, hawk-on"
+license-file = ["LICENSE", "0"]
+section = "utils"
+priority = "optional"
+depends = "$auto"
+extended-description = """\
+Read-only diagnostic CLI for the Ford S-Max Mk2 using an ELM327 USB cable: \
+battery tests based on the OBD voltage, DTC reading over HS-CAN and MS-CAN, \
+and a shareable Markdown report. Everything sent to the car goes through a \
+type-enforced allowlist; nothing can clear, write or reset. \
+Use at your own risk. Not affiliated with Ford."""
+assets = [
+    ["target/release/fordiag", "usr/bin/", "755"],
+    ["README.md", "usr/share/doc/fordiag/README.md", "644"],
+    ["docs/MANUAL.md", "usr/share/doc/fordiag/MANUAL.md", "644"],
+    ["docs/BACKGROUND.md", "usr/share/doc/fordiag/BACKGROUND.md", "644"],
+]

@@ -1,0 +1,41 @@
+# Optional Windows build (x86_64, runs on Windows 10/11 64-bit). Not part of the
+# required CI: start it by hand under Actions → "Windows (optional)" → Run workflow.
+# Release builds for Windows are made by release.yml.
+name: Windows (optional)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows:
+    name: Build and test on Windows x64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked
+      - run: cargo build --locked --release
+      - name: Smoke test
+        shell: pwsh
+        run: |
+          .\target\release\fordiag.exe --version
+          $out = .\target\release\fordiag.exe check "14 FF FF FF"
+          if (-not ($out -match '^REJECTED')) { throw "allowlist check failed: $out" }
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target\release\fordiag.exe, README.md, LICENSE, docs\MANUAL.md dist\
+          Compress-Archive -Path dist\* -DestinationPath fordiag-x86_64-windows.zip -Force
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fordiag-windows-x86_64
+          path: fordiag-x86_64-windows.zip
+          if-no-files-found: error

@@ -1,11 +1,17 @@
-//! fordiag – les-berre diagnoseverktøy for Ford S-Max via ELM327.
+//! fordiag – read-only diagnostic tool for the Ford S-Max via ELM327.
 //!
-//! Sjå README.md for bruk. Tryggleik: alt som blir sendt til bilen går
-//! gjennom tillatslista i `command.rs`.
+//! See README.md for usage. Safety: everything sent to the car goes through
+//! the allowlist in `command.rs`.
 
 mod battery;
 mod command;
+mod dtc;
 mod elm;
+mod isotp;
+mod replay;
+mod report;
+#[cfg(test)]
+mod safety_tests;
 mod transport;
 
 use anyhow::Result;
@@ -19,25 +25,36 @@ use std::time::Duration;
 use transport::{Logged, MockTransport, RawLog};
 
 #[derive(Parser)]
-#[command(name = "fordiag", version, about = "Les-berre diagnose for Ford S-Max via ELM327")]
+#[command(
+    name = "fordiag",
+    version,
+    about = "Read-only diagnostics for the Ford S-Max via ELM327",
+    after_help = DISCLAIMER
+)]
 struct Cli {
-    /// Seriellport (eller pseudoterminal frå ein ELM327-emulator)
-    #[arg(long, global = true, default_value = "/dev/ttyUSB0")]
+    /// Serial port (or pseudo-terminal from an ELM327 emulator). On Windows, check
+    /// Device Manager for the COM port number.
+    #[arg(long, global = true, default_value = DEFAULT_PORT)]
     port: String,
 
-    /// Tving baudrate (elles: prøv 38400, så 115200)
+    /// Force baud rate (otherwise: try 38400, then 115200)
     #[arg(long, global = true)]
     baud: Option<u32>,
 
-    /// Bruk innebygd simulator i staden for kabel og bil
-    #[arg(long, global = true)]
+    /// Use the built-in simulator instead of cable and car
+    #[arg(long, global = true, conflicts_with = "replay")]
     mock: bool,
 
-    /// Mappe for loggar og resultat
+    /// Replay a recorded raw log (fordiag-data/logs/raw-*.jsonl) instead of using
+    /// the cable. Run the same command with the same options as when it was recorded.
+    #[arg(long, global = true, value_name = "LOG")]
+    replay: Option<PathBuf>,
+
+    /// Directory for logs and results
     #[arg(long, global = true, default_value = "fordiag-data")]
     data_dir: PathBuf,
 
-    /// Ikkje vent på Enter før målingar
+    /// Do not wait for Enter before measurements
     #[arg(long, short = 'y', global = true)]
     yes: bool,
 
@@ -47,20 +64,44 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Kople til ELM327, køyr init og vis versjon, protokoll og spenning
+    /// Connect to the ELM327, run init and show version, protocol and voltage
     Connect {
-        /// Buss: hs (500 kbit/s) eller ms (125 kbit/s)
+        /// Bus: hs (500 kbit/s) or ms (125 kbit/s)
         #[arg(long, value_enum, default_value = "hs")]
         bus: Bus,
-        /// Send òg OBD «01 00» for å sjå om motorstyringa svarar (krev tenning på)
+        /// Also send OBD "01 00" to see if the engine control module responds (requires ignition on)
         #[arg(long)]
         probe: bool,
     },
-    /// Batteritestar basert på spenninga på OBD-kontakten
+    /// Battery tests based on the voltage at the OBD connector
     Battery(BatteryArgs),
-    /// Sjekk ein kommando mot tillatslista utan å sende han
+    /// Read DTCs (OBD 03/07/0A from the PCM, UDS 19 02 FF from each module)
+    Dtc {
+        /// Bus: hs (500 kbit/s) or ms (125 kbit/s)
+        #[arg(long, value_enum, default_value = "hs")]
+        bus: Bus,
+        /// Only these modules (e.g. --module BCM --module ACM). Default: all candidates
+        #[arg(long = "module", value_name = "NAME")]
+        modules: Vec<String>,
+        /// List the candidate modules and exit
+        #[arg(long)]
+        list: bool,
+    },
+    /// Write a Markdown report from the latest saved results (no cable needed)
+    Report {
+        /// Output file (default: <data-dir>/report-YYYYMMDD-HHMMSS.md)
+        #[arg(long, short = 'o')]
+        output: Option<PathBuf>,
+        /// Vehicle description to put at the top, e.g. "Ford S-Max Mk2 2.0 TDCi"
+        #[arg(long)]
+        vehicle: Option<String>,
+        /// Leave out the raw logs appendix
+        #[arg(long)]
+        no_raw: bool,
+    },
+    /// Check a command against the allowlist without sending it
     Check {
-        /// T.d. «19 02 FF» eller «ATSH 7E0»
+        /// E.g. "19 02 FF" or "ATSH 7E0"
         text: String,
     },
 }
@@ -69,10 +110,10 @@ enum Cmd {
 struct BatteryArgs {
     #[command(flatten)]
     mode: BatteryMode,
-    /// Kor lenge å måle i sekund (standard: rest 10, crank 15)
+    /// How long to measure, in seconds (default: rest 10, crank 15)
     #[arg(long)]
     seconds: Option<u64>,
-    /// Kor lenge å måle lading i minutt
+    /// How long to measure charging, in minutes
     #[arg(long, default_value_t = 3)]
     minutes: u64,
 }
@@ -80,32 +121,43 @@ struct BatteryArgs {
 #[derive(Args)]
 #[group(required = true, multiple = false)]
 struct BatteryMode {
-    /// Kvilespenning (bilen har stått i fleire timar)
+    /// Resting voltage (the car has been parked for several hours)
     #[arg(long)]
     rest: bool,
-    /// Lågaste spenning under start
+    /// Lowest voltage while cranking
     #[arg(long)]
     crank: bool,
-    /// Ladespenning med motoren i gang
+    /// Charging voltage with the engine running
     #[arg(long)]
     charging: bool,
-    /// Samla vurdering av siste lagra testar
+    /// Overall assessment of the latest saved tests
     #[arg(long)]
     summary: bool,
 }
 
-/// Kva slags simulert bil `--mock` skal late som.
+/// What kind of simulated car `--mock` should pretend to be.
 #[derive(Clone, Copy)]
 enum MockScenario {
     Rest,
     Crank,
     Charging,
     Generic,
+    Dtc,
 }
+
+/// Default serial port: the usual name of a USB serial adapter on each platform.
+#[cfg(not(windows))]
+const DEFAULT_PORT: &str = "/dev/ttyUSB0";
+#[cfg(windows)]
+const DEFAULT_PORT: &str = "COM3";
+
+/// Shown at the bottom of `--help`.
+const DISCLAIMER: &str = "DISCLAIMER: Use at your own risk. fordiag is provided \"as is\", without warranty of any kind \
+(see LICENSE). It is not affiliated with or endorsed by Ford. Do not operate it while driving.";
 
 fn main() {
     if let Err(e) = run() {
-        eprintln!("Feil: {e:#}");
+        eprintln!("Error: {e:#}");
         std::process::exit(1);
     }
 }
@@ -115,21 +167,29 @@ fn run() -> Result<()> {
     match &cli.cmd {
         Cmd::Check { text } => {
             match Command::parse(text) {
-                Ok(c) => println!("TILLATEN: {:?} → sendast som «{}»", c, c.to_wire()),
-                Err(e) => println!("AVVIST: {e}"),
+                Ok(c) => println!("ALLOWED: {:?} → sent as \"{}\"", c, c.to_wire()),
+                Err(e) => println!("REJECTED: {e}"),
             }
             Ok(())
         }
         Cmd::Connect { bus, probe } => cmd_connect(&cli, *bus, *probe),
         Cmd::Battery(args) => cmd_battery(&cli, args),
+        Cmd::Dtc { bus, modules, list } => cmd_dtc(&cli, *bus, modules, *list),
+        Cmd::Report {
+            output,
+            vehicle,
+            no_raw,
+        } => cmd_report(&cli, output.clone(), vehicle.clone(), *no_raw),
     }
 }
 
-/// Opne kabelen (eller simulatoren) med rålogg. Returnerer òg loggen.
+/// Open the cable (or the simulator) with a raw log. Also returns the log.
 fn open(cli: &Cli, scenario: MockScenario) -> Result<(Elm, RawLog)> {
     let log = RawLog::create(&cli.data_dir.join("logs"))?;
     let inner: Box<dyn transport::Transport> = if cli.mock {
         Box::new(mock_for(scenario))
+    } else if let Some(path) = &cli.replay {
+        Box::new(replay::ReplayTransport::open(path)?)
     } else {
         elm::open_serial(&cli.port, cli.baud, &log)?
     };
@@ -137,16 +197,29 @@ fn open(cli: &Cli, scenario: MockScenario) -> Result<(Elm, RawLog)> {
     Ok((elm, log))
 }
 
-/// Spør brukaren og vent på Enter (hoppast over med `--yes` eller `--mock`).
+/// File name of a raw log, stored in results so the report can find it.
+fn log_name(log: &RawLog) -> Option<String> {
+    log.path().file_name().and_then(|n| n.to_str()).map(String::from)
+}
+
+/// Prompt the user and wait for Enter (skipped with `--yes` or `--mock`).
 fn wait_enter(cli: &Cli, prompt: &str) -> Result<()> {
     println!("{prompt}");
-    if cli.yes || cli.mock {
+    if cli.yes || cli.mock || cli.replay.is_some() {
         return Ok(());
     }
-    print!("Trykk Enter når du er klar … ");
+    print!("Press Enter when ready … ");
     std::io::stdout().flush()?;
     let mut line = String::new();
-    std::io::stdin().lock().read_line(&mut line)?;
+    // No input at all (stdin closed, e.g. when run by a script or an AI agent):
+    // do not start a measurement the user may not be ready for.
+    if std::io::stdin().lock().read_line(&mut line)? == 0 {
+        println!();
+        anyhow::bail!(
+            "no keyboard input available. Make sure the physical setup above is done, \
+             then run the command again with --yes."
+        );
+    }
     Ok(())
 }
 
@@ -156,29 +229,31 @@ fn wait_enter(cli: &Cli, prompt: &str) -> Result<()> {
 
 fn cmd_connect(cli: &Cli, bus: Bus, probe: bool) -> Result<()> {
     if bus == Bus::Ms {
-        wait_enter(cli, "MS-CAN: slå brytaren på kabelen over til MS (125 kbit/s) først.")?;
+        wait_enter(cli, "MS-CAN: set the switch on the cable to MS (125 kbit/s) first.")?;
     }
     let (mut elm, log) = open(cli, MockScenario::Generic)?;
-    println!("Tilkopla: {}", elm.describe());
+    println!("Connected: {}", elm.describe());
 
     elm.init(bus)?;
-    println!("ELM-versjon: {}", elm.identify()?);
-    println!("Protokoll:   {}", elm.describe_protocol()?);
-    println!("Spenning:    {}", fmt_v(elm.voltage()?));
+    println!("ELM version: {}", elm.identify()?);
+    println!("Protocol:    {}", elm.describe_protocol()?);
+    println!("Voltage:     {}", fmt_v(elm.voltage()?));
 
     if probe {
-        println!("\nSender OBD «01 00» (støtta PID-ar) …");
+        println!("\nSending OBD \"01 00\" (supported PIDs) …");
         match elm.diag(DiagRequest::Obd(ObdRequest::CurrentData { pid: 0x00 }))? {
             DiagReply::Data(lines) => {
-                println!("Svar:");
+                println!("Response:");
                 for l in lines {
                     println!("  {l}");
                 }
             }
-            DiagReply::NoData => println!("NO DATA – ingen modul svarte. Er tenninga på, og står brytaren rett?"),
+            DiagReply::NoData => {
+                println!("NO DATA – no module responded. Is the ignition on, and is the switch in the right position?")
+            }
         }
     }
-    println!("\nRålogg: {}", log.path().display());
+    println!("\nRaw log: {}", log.path().display());
     Ok(())
 }
 
@@ -200,38 +275,38 @@ fn cmd_battery(cli: &Cli, args: &BatteryArgs) -> Result<()> {
         MockScenario::Charging
     };
 
-    // Instruksjonar til brukaren før vi opnar kabelen.
+    // Instructions to the user before we open the cable.
     match scenario {
         MockScenario::Rest => wait_enter(
             cli,
-            "KVILESPENNING: Bilen skal ha stått i fleire timar utan ladar og utan bruk.\n\
-             Ikkje slå på tenninga. Har du nett opna døra for å kople til kabelen, vent\n\
-             gjerne 10–30 min med dørene lukka så bilen sovnar att.",
+            "RESTING VOLTAGE: The car should have been parked for several hours without a charger and unused.\n\
+             Do not switch on the ignition. If you just opened the door to plug in the cable, wait\n\
+             10–30 min with the doors closed so the car goes back to sleep.",
         )?,
         MockScenario::Crank => wait_enter(
             cli,
             &format!(
-                "STARTTEST: Set deg i bilen. Målinga varer i {} s.\n\
-                 Start motoren 2–3 sekund etter at det står «START NO».",
+                "CRANK TEST: Sit in the car. The measurement lasts {} s.\n\
+                 Start the engine 2–3 seconds after \"START NOW\" appears.",
                 args.seconds.unwrap_or(15)
             ),
         )?,
         _ => wait_enter(
             cli,
-            "LADETEST: Start motoren og la han gå på tomgang heile målinga.\n\
-             Ikkje slå av motoren før målinga er ferdig.",
+            "CHARGING TEST: Start the engine and let it idle for the whole measurement.\n\
+             Do not switch off the engine until the measurement is finished.",
         )?,
     }
 
     let (mut elm, log) = open(cli, scenario)?;
-    // Berre grunnleggjande init: ATRV sender ingenting på CAN-bussen.
+    // Basic init only: ATRV sends nothing on the CAN bus.
     elm.reset()?;
     let started = chrono::Local::now();
 
     let (samples, analysis) = match scenario {
         MockScenario::Rest => {
             let secs = args.seconds.unwrap_or(10);
-            println!("Måler i {secs} s …");
+            println!("Measuring for {secs} s …");
             let s = battery::sample_voltage(
                 &mut elm,
                 Duration::from_secs(secs),
@@ -244,7 +319,7 @@ fn cmd_battery(cli: &Cli, args: &BatteryArgs) -> Result<()> {
         }
         MockScenario::Crank => {
             let secs = args.seconds.unwrap_or(15);
-            println!(">>> START NO <<<  (måler i {secs} s)");
+            println!(">>> START NOW <<<  (measuring for {secs} s)");
             let s = battery::sample_voltage(&mut elm, Duration::from_secs(secs), None, |_| {})?;
             let r = battery::analyse_crank(&s);
             print_crank(&r, s.len());
@@ -252,7 +327,7 @@ fn cmd_battery(cli: &Cli, args: &BatteryArgs) -> Result<()> {
         }
         _ => {
             let secs = args.seconds.unwrap_or(args.minutes * 60);
-            println!("Måler i {secs} s, éi måling per sekund …");
+            println!("Measuring for {secs} s, one measurement per second …");
             let mut last_print = 0;
             let s = battery::sample_voltage(&mut elm, Duration::from_secs(secs), Some(Duration::from_secs(1)), |s| {
                 if s.t_ms >= last_print {
@@ -271,10 +346,11 @@ fn cmd_battery(cli: &Cli, args: &BatteryArgs) -> Result<()> {
         source: elm.describe(),
         analysis,
         samples,
+        raw_log: log_name(&log),
     };
     let path = test.save(&cli.data_dir)?;
-    println!("\nResultat lagra: {}", path.display());
-    println!("Rålogg:         {}", log.path().display());
+    println!("\nResult saved: {}", path.display());
+    println!("Raw log:      {}", log.path().display());
     Ok(())
 }
 
@@ -286,49 +362,52 @@ fn print_warnings(w: &[String]) {
 
 fn print_rest(r: &battery::RestResult, n: usize) {
     println!(
-        "\nKvilespenning ({n} målingar): median {} (min {}, maks {})",
+        "\nResting voltage ({n} measurements): median {} (min {}, max {})",
         fmt_v(r.median),
         fmt_v(r.min),
         fmt_v(r.max)
     );
-    println!("Vurdering: {}", r.verdict.text());
+    println!("Verdict: {}", r.verdict.text());
     print_warnings(&r.warnings);
 }
 
 fn print_crank(r: &battery::CrankResult, n: usize) {
-    println!("\nStarttest ({n} målingar, snitt {:.0} ms mellom):", r.mean_interval_ms);
-    println!("  Før start:  {}", fmt_v(r.before));
     println!(
-        "  Lågaste:    {} (etter {} s)",
-        fmt_v(r.min),
-        format!("{:.1}", r.min_t_ms as f32 / 1000.0).replace('.', ",")
+        "\nCrank test ({n} measurements, mean {:.0} ms apart):",
+        r.mean_interval_ms
     );
-    println!("  Etter:      {}", fmt_v(r.after));
-    println!("Vurdering: {}", r.verdict.text());
+    println!("  Before:  {}", fmt_v(r.before));
+    println!(
+        "  Lowest:  {} (after {:.1} s)",
+        fmt_v(r.min),
+        r.min_t_ms as f32 / 1000.0
+    );
+    println!("  After:   {}", fmt_v(r.after));
+    println!("Verdict: {}", r.verdict.text());
     print_warnings(&r.warnings);
 }
 
 fn print_charging(r: &battery::ChargingResult, n: usize) {
-    println!("\nLadetest ({n} målingar):");
+    println!("\nCharging test ({n} measurements):");
     println!(
-        "  Min / snitt / maks: {} / {} / {}",
+        "  Min / mean / max: {} / {} / {}",
         fmt_v(r.min),
         fmt_v(r.mean),
         fmt_v(r.max)
     );
     println!(
-        "  Trend: {} ({} V/min), {:.0} % av tida ≥ 13,2 V",
+        "  Trend: {} ({:+.2} V/min), {:.0} % of the time ≥ 13.2 V",
         r.trend_text(),
-        format!("{:+.2}", r.slope_v_per_min).replace('.', ","),
+        r.slope_v_per_min,
         r.share_above_13_2 * 100.0
     );
-    println!("Vurdering: {}", r.verdict.text());
+    println!("Verdict: {}", r.verdict.text());
     print_warnings(&r.warnings);
 }
 
 fn battery_summary(cli: &Cli) -> Result<()> {
     let latest = BatteryTest::load_latest(&cli.data_dir)?;
-    println!("Siste lagra batteritestar i {}:", cli.data_dir.display());
+    println!("Latest saved battery tests in {}:", cli.data_dir.display());
     let rest = latest.rest.as_ref().and_then(|t| match &t.analysis {
         Analysis::Rest(r) => Some((t, r)),
         _ => None,
@@ -341,32 +420,198 @@ fn battery_summary(cli: &Cli) -> Result<()> {
         Analysis::Charging(r) => Some((t, r)),
         _ => None,
     });
-    let when = |t: &BatteryTest| format!("{} [{}]", t.started.format("%d.%m.%Y %H:%M"), t.source);
+    let when = |t: &BatteryTest| format!("{} [{}]", t.started.format("%Y-%m-%d %H:%M"), t.source);
     match rest {
-        Some((t, r)) => println!("  Kvile:  {} – {}  ({})", fmt_v(r.median), r.verdict.text(), when(t)),
-        None => println!("  Kvile:  ikkje målt"),
+        Some((t, r)) => println!("  Rest:     {} – {}  ({})", fmt_v(r.median), r.verdict.text(), when(t)),
+        None => println!("  Rest:     not measured"),
     }
     match crank {
         Some((t, r)) => println!(
-            "  Start:  lågaste {} – {}  ({})",
+            "  Crank:    lowest {} – {}  ({})",
             fmt_v(r.min),
             r.verdict.text(),
             when(t)
         ),
-        None => println!("  Start:  ikkje målt"),
+        None => println!("  Crank:    not measured"),
     }
     match charging {
         Some((t, r)) => println!(
-            "  Lading: snitt {} – {}  ({})",
+            "  Charging: mean {} – {}  ({})",
             fmt_v(r.mean),
             r.verdict.text(),
             when(t)
         ),
-        None => println!("  Lading: ikkje målt"),
+        None => println!("  Charging: not measured"),
     }
-    println!("\nSamla vurdering:");
+    println!("\nOverall assessment:");
     for line in battery::overall_assessment(rest.map(|x| x.1), crank.map(|x| x.1), charging.map(|x| x.1)) {
         println!("  • {line}");
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// dtc
+// ---------------------------------------------------------------------------
+
+fn cmd_dtc(cli: &Cli, bus: Bus, names: &[String], list: bool) -> Result<()> {
+    if list {
+        println!("Candidate modules (ALL ADDRESSES UNVERIFIED for this car):");
+        for m in dtc::CANDIDATES {
+            println!(
+                "  {:<5} {:03X} → {:03X}  bus {:<2}  {}",
+                m.name,
+                m.request,
+                m.request + 8,
+                m.likely_bus,
+                m.description
+            );
+        }
+        return Ok(());
+    }
+
+    let modules: Vec<&dtc::Module> = if names.is_empty() {
+        dtc::CANDIDATES.iter().collect()
+    } else {
+        names
+            .iter()
+            .map(|n| {
+                dtc::find_module(n).ok_or_else(|| anyhow::anyhow!("unknown module \"{n}\" (see `fordiag dtc --list`)"))
+            })
+            .collect::<Result<_>>()?
+    };
+
+    let switch = match bus {
+        Bus::Hs => "HS",
+        Bus::Ms => "MS",
+    };
+    wait_enter(
+        cli,
+        &format!(
+            "DTC READ ({switch}-CAN): Set the switch on the cable to {switch}. Ignition ON, engine OFF.\n\
+             This only reads; nothing is cleared. Takes about 1 s per module."
+        ),
+    )?;
+
+    let (mut elm, log) = open(cli, MockScenario::Dtc)?;
+    elm.init(bus)?;
+    elm.prepare_for_dtc()?;
+    let started = chrono::Local::now();
+
+    let mut results = Vec::new();
+    for m in modules {
+        // OBD modes 03/07/0A are only meaningful for the engine control module.
+        let include_obd = m.name == "PCM";
+        let r = dtc::scan_module(&mut elm, m, include_obd)?;
+        print_module(&r);
+        results.push(r);
+    }
+
+    let responded: Vec<&str> = results
+        .iter()
+        .filter(|r| r.responded())
+        .map(|r| r.name.as_str())
+        .collect();
+    let silent: Vec<&str> = results
+        .iter()
+        .filter(|r| !r.responded())
+        .map(|r| r.name.as_str())
+        .collect();
+    println!(
+        "\nResponded on {switch}-CAN: {}",
+        if responded.is_empty() {
+            "none".into()
+        } else {
+            responded.join(", ")
+        }
+    );
+    println!(
+        "No response:        {}",
+        if silent.is_empty() {
+            "none".into()
+        } else {
+            silent.join(", ")
+        }
+    );
+    if responded.is_empty() {
+        println!("  ! Nothing answered. Is the ignition on, and is the cable switch on {switch}?");
+    }
+    println!(
+        "\nNote: DTC meanings are not included. Look them up in FORScan or Ford documentation.\n\
+         Failure-type texts are generic SAE suggestions and must be checked against Ford documentation."
+    );
+
+    let scan = dtc::DtcScan {
+        started,
+        source: elm.describe(),
+        bus: switch.to_lowercase(),
+        modules: results,
+        raw_log: log_name(&log),
+    };
+    let path = scan.save(&cli.data_dir)?;
+    println!("\nResult saved: {}", path.display());
+    println!("Raw log:      {}", log.path().display());
+    Ok(())
+}
+
+fn print_module(r: &dtc::ModuleResult) {
+    let tag = if r.responded() { "responded" } else { "no response" };
+    println!(
+        "\n== {} ({} → {}) – {} [{}] ==",
+        r.name, r.request_id, r.response_id, r.description, tag
+    );
+    for read in &r.reads {
+        match &read.outcome {
+            dtc::Outcome::NoResponse => println!("  {:<20} no response", read.label),
+            dtc::Outcome::Negative { nrc, meaning } => {
+                println!("  {:<20} negative response 0x{nrc:02X} ({meaning})", read.label)
+            }
+            dtc::Outcome::Error { message } => println!("  {:<20} error: {message}", read.label),
+            dtc::Outcome::Dtcs { dtcs } if dtcs.is_empty() => println!("  {:<20} no DTCs", read.label),
+            dtc::Outcome::Dtcs { dtcs } => {
+                println!("  {:<20} {} DTC(s):", read.label, dtcs.len());
+                for d in dtcs {
+                    let mut line = format!("    {:<10} {}", d.display(), dtc::code_category(&d.code));
+                    if let Some(f) = d.ftb.and_then(dtc::ftb_suggestion) {
+                        line += &format!(", type: {f} (suggestion)");
+                    }
+                    if let Some(st) = d.status {
+                        line += &format!(", status 0x{st:02X} [{}]", dtc::status_text(st).join(", "));
+                    }
+                    println!("{line}");
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// report
+// ---------------------------------------------------------------------------
+
+fn cmd_report(cli: &Cli, output: Option<PathBuf>, vehicle: Option<String>, no_raw: bool) -> Result<()> {
+    let input = report::load(&cli.data_dir, vehicle, !no_raw)?;
+    let markdown = report::render(&input);
+    let path = output.unwrap_or_else(|| {
+        cli.data_dir
+            .join(format!("report-{}.md", input.generated.format("%Y%m%d-%H%M%S")))
+    });
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&path, &markdown)?;
+
+    let b = &input.battery;
+    let n_battery = [&b.rest, &b.crank, &b.charging].iter().filter(|t| t.is_some()).count();
+    println!("Report written: {}", path.display());
+    println!(
+        "  {} of 3 battery tests, {} DTC scan(s), {} raw log(s) included.",
+        n_battery,
+        input.dtc.len(),
+        input.raw_logs.len()
+    );
+    if !no_raw {
+        println!("  The raw logs make the report long; use --no-raw for a short version.");
     }
     Ok(())
 }
@@ -375,29 +620,29 @@ fn battery_summary(cli: &Cli) -> Result<()> {
 // Simulator for --mock
 // ---------------------------------------------------------------------------
 
-/// Enkel deterministisk «støy» på ±0,05 V, så simulerte kurver ser naturlege ut.
+/// Simple deterministic "noise" of ±0.05 V, so simulated curves look natural.
 fn wobble(t: f32) -> f32 {
     ((t * 7.3).sin() + (t * 2.1).cos()) * 0.025
 }
 
 fn mock_for(scenario: MockScenario) -> MockTransport {
-    // Litt forseinking per kommando, som på ein ekte kabel.
+    // A little delay per command, as on a real cable.
     let m = MockTransport::elm_defaults().with_latency(Duration::from_millis(25));
     match scenario {
         MockScenario::Rest => m.with_voltage(Box::new(|t| 12.45 + wobble(t.as_secs_f32()))),
         MockScenario::Crank => m.with_voltage(Box::new(|t| {
             let s = t.as_secs_f32();
             match s {
-                s if s < 3.0 => 12.3 + wobble(s),                         // tenning på
-                s if s < 3.2 => 12.3 - (s - 3.0) / 0.2 * 2.2,             // startmotor slår inn
-                s if s < 4.0 => 10.3 + (s - 3.2) * 0.4 + wobble(s) * 2.0, // sveiv
-                s if s < 5.0 => 10.6 + (s - 4.0) * 3.7,                   // motoren tek
-                s => 14.3 + wobble(s),                                    // lading
+                s if s < 3.0 => 12.3 + wobble(s),                         // ignition on
+                s if s < 3.2 => 12.3 - (s - 3.0) / 0.2 * 2.2,             // starter engages
+                s if s < 4.0 => 10.3 + (s - 3.2) * 0.4 + wobble(s) * 2.0, // cranking
+                s if s < 5.0 => 10.6 + (s - 4.0) * 3.7,                   // engine catches
+                s => 14.3 + wobble(s),                                    // charging
             }
         })),
         MockScenario::Charging => m.with_voltage(Box::new(|t| {
             let s = t.as_secs_f32();
-            // Smartlading: høg i starten, fell sakte, med eit kvileparti.
+            // Smart charging: high at first, slowly falling, with a resting phase.
             let base = 14.5 - s / 180.0 * 0.6;
             if (100.0..130.0).contains(&s) {
                 12.9 + wobble(s)
@@ -406,5 +651,19 @@ fn mock_for(scenario: MockScenario) -> MockTransport {
             }
         })),
         MockScenario::Generic => m.on("0100", "SEARCHING...\r7E8 06 41 00 BE 3F A8 13\r\r"),
+        // Made-up example data; the codes mean nothing in particular.
+        MockScenario::Dtc => m
+            .with_diag_default("NO DATA\r\r")
+            .on_target("7E0", "03", "7E8 02 43 00\r\r")
+            .on_target("7E0", "07", "7E8 04 47 01 05 63\r\r")
+            .on_target("7E0", "0A", "7E8 02 4A 00\r\r")
+            .on_target("7E0", "1902FF", "7E8 03 59 02 FF\r\r")
+            .on_target(
+                "726",
+                "1902FF",
+                "72E 10 0F 59 02 FF F0 03 16\r72E 21 08 92 00 00 28 91 17\r72E 22 62 28 AA AA AA AA AA\r\r",
+            )
+            .on_target("727", "1902FF", "72F 03 7F 19 31\r\r")
+            .on_target("720", "1902FF", "728 07 59 02 FF C1 00 00 2F\r\r"),
     }
 }
