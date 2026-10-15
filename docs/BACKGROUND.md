@@ -78,12 +78,18 @@ directly to the battery posts, the BMS may never have seen the recharge after th
 deep discharge. It would then still believe the SOC is very low and keep shedding
 load. That fits the 12 V outlet cutting out even with the engine running.
 
-**What to do:**
-1. Note how the charger was connected last time.
-2. Next time, charge with the negative clamp on the ground point from the owner's
-   manual.
-3. Then let the car sleep, locked, for at least 4–8 hours.
-4. Check whether the symptoms remain, and repeat `fordiag battery --rest`.
+**Update (2026-10-15): this hypothesis is unlikely.** The owner confirms the charger was
+connected correctly: positive on the battery post, negative on a ground point. The
+charging current should therefore have passed through the sensor.
+
+Remaining explanations (all unverified):
+- The BMS has not yet had a long enough rest (≥ 4–8 h asleep) to recalibrate after
+  the charge.
+- The battery was actually damaged by the deep discharges (below 9 V), and the BMS has
+  correctly estimated reduced health or capacity.
+- The sensor itself, or its connection, is faulty (see recall 18P11 above).
+
+The battery tests and the DTCs from the BCM (phase 3) should help tell these apart.
 
 ---
 
@@ -155,8 +161,8 @@ load. That fits the 12 V outlet cutting out even with the engine running.
 1. Check whether **recall 18P11** has been carried out on this car (VIN on Ford's
    recall page, or ask a dealer).
 2. Look at the negative terminal and the BMS sensor for corrosion.
-3. Charge with the **negative clamp on the body ground point**, then let the car
-   sleep for at least 4–8 hours.
+3. Charge as before (negative clamp on the ground point, which was already done), then
+   let the car sleep, locked, for at least 4–8 hours.
 4. Run `fordiag battery --rest`, `--crank` and `--charging`.
 5. Read DTCs (phase 3), first on HS-CAN (PCM), then on MS-CAN (BCM, ACM, APIM, IPC),
    confirming each address as we go.
