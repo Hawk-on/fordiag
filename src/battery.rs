@@ -448,6 +448,10 @@ pub struct BatteryTest {
     pub source: String,
     pub analysis: Analysis,
     pub samples: Vec<Sample>,
+    /// File name of the raw log for this run (in `<data-dir>/logs/`). Missing in
+    /// files saved by older versions.
+    #[serde(default)]
+    pub raw_log: Option<String>,
 }
 
 impl BatteryTest {
@@ -533,7 +537,7 @@ pub fn overall_assessment(
         match c.verdict {
             ChargingVerdict::Normal => out.push("The charging voltage looks normal.".into()),
             ChargingVerdict::Low => out.push(
-                "The charging voltage is low. It may be smart charging holding back because the battery monitoring system (BMS) thinks the battery is full/unknown – or a charging fault. See DTCs (phase 3).".into(),
+                "The charging voltage is low. It may be smart charging holding back because the battery monitoring system (BMS) thinks the battery is full/unknown – or a charging fault. Read the DTCs (`fordiag dtc`).".into(),
             ),
             ChargingVerdict::High => out.push("The charging voltage is high (above 15 V) and should be checked.".into()),
             ChargingVerdict::Variable => out.push("The charging voltage varies, which is common with Ford smart charging.".into()),
@@ -545,7 +549,7 @@ pub fn overall_assessment(
     }
     out.push(
         "Note: Voltage tests do not measure capacity. Nor do they alone explain the SYNC/12 V outlet symptoms; \
-         DTCs from BCM/ACM/APIM (phase 3) will tell more about load shedding."
+         DTCs from BCM/ACM/APIM (`fordiag dtc`) will tell more about load shedding."
             .into(),
     );
     out
@@ -668,6 +672,7 @@ mod tests {
             source: "test".into(),
             analysis: Analysis::Rest(analyse_rest(&s)),
             samples: s,
+            raw_log: None,
         };
         test.save(&dir).unwrap();
         let latest = BatteryTest::load_latest(&dir).unwrap();

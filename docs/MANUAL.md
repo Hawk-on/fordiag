@@ -5,7 +5,7 @@
 that writes to the car, such as clearing DTCs or resetting the battery monitoring
 system (BMS), is done in FORScan.
 
-This manual covers version 0.1 (phases 1–3: connection, battery and DTCs).
+This manual covers version 0.1 (phases 1–4: connection, battery, DTCs and report).
 
 > [!WARNING]
 > **Disclaimer: use at your own risk.** fordiag is provided "as is", without
@@ -28,11 +28,12 @@ This manual covers version 0.1 (phases 1–3: connection, battery and DTCs).
 4. [`fordiag connect`](#4-fordiag-connect)
 5. [`fordiag battery`](#5-fordiag-battery)
 6. [`fordiag dtc`](#6-fordiag-dtc)
-7. [`fordiag check`](#7-fordiag-check)
-8. [Files created by the tool](#8-files-created-by-the-tool)
-9. [Safety and the allowlist](#9-safety-and-the-allowlist)
-10. [Troubleshooting](#10-troubleshooting)
-11. [Testing without a car](#11-testing-without-a-car)
+7. [`fordiag report`](#7-fordiag-report)
+8. [`fordiag check`](#8-fordiag-check)
+9. [Files created by the tool](#9-files-created-by-the-tool)
+10. [Safety and the allowlist](#10-safety-and-the-allowlist)
+11. [Troubleshooting](#11-troubleshooting)
+12. [Testing without a car](#12-testing-without-a-car)
 
 ---
 
@@ -84,10 +85,10 @@ e.g. `cp target/release/fordiag ~/.local/bin/`.
 | `fordiag battery --summary` | Overall assessment of saved tests | No |
 | `fordiag dtc` | Read DTCs from the PCM and other modules | Yes (or `--mock`) |
 | `fordiag dtc --list` | List the candidate modules and addresses | No |
+| `fordiag report` | Markdown report from the latest saved results | No |
 | `fordiag check "<command>"` | Check a command against the allowlist | No |
 | `fordiag help [command]` | Built-in help | No |
 
-Planned: `fordiag report` (Markdown report, phase 4).
 
 ---
 
@@ -185,7 +186,7 @@ The battery tests only send `ATZ`, `ATE0`, `ATL0` and `ATRV`. **Nothing goes out
 the CAN bus**, so the measurement itself does not wake the car.
 
 Each test is saved as JSON in `fordiag-data/` (see
-[chapter 8](#8-files-created-by-the-tool)).
+[chapter 9](#9-files-created-by-the-tool)).
 
 ### 5.1 `--rest`: resting voltage
 
@@ -387,7 +388,53 @@ modules themselves.
 
 The result is saved as `fordiag-data/dtc-<bus>-YYYYMMDD-HHMMSS.json`.
 
-## 7. `fordiag check`
+## 7. `fordiag report`
+
+Writes a Markdown report from the **latest saved results** in `--data-dir`. It needs
+neither cable nor car, so you can run it at home afterwards.
+
+```
+fordiag report [--vehicle "TEXT"] [-o FILE] [--no-raw]
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--vehicle "TEXT"` | none | Vehicle description at the top, e.g. `"Ford S-Max Mk2 2.0 TDCi 150, PowerShift"` |
+| `-o`, `--output FILE` | `fordiag-data/report-YYYYMMDD-HHMMSS.md` | Where to write the report |
+| `--no-raw` | off | Leave out the raw logs appendix (gives a much shorter report) |
+
+### What it contains
+
+1. **Header:** date, fordiag version, the vehicle text, and a short disclaimer. If any
+   result came from `--mock`, a clear warning that the report contains simulated data.
+2. **Summary:** the overall battery assessment (as in `battery --summary`) and, per
+   bus, the number of DTCs and which modules responded.
+3. **Battery tests:** the latest resting, crank and charging test with values,
+   verdict and warnings. Missing tests are listed with the command to run.
+4. **DTCs:** for the latest HS and MS scan, a table of every module (address, whether
+   it responded, result per read), and then a table of codes for each module that
+   has any: code, category, failure type (suggestion) and status bits.
+5. **Appendix: raw logs:** the complete raw logs of those runs, one line per event
+   (`timestamp dir data`, with `\r` made visible).
+
+Only the latest test of each kind and the latest scan per bus are used. Older results
+stay in `fordiag-data/` but are not included.
+
+### Privacy
+
+The report contains no VIN or registration number, unless you put them in
+`--vehicle` yourself. The raw logs only contain what fordiag sent and received.
+fordiag never asks for the VIN (OBD `09 02`). Read the report before sharing it
+anyway.
+
+### Sharing
+
+The report is plain Markdown. GitHub, GitLab and most editors render it nicely, and it
+can be converted to PDF or HTML with e.g. `pandoc report.md -o report.pdf`. Use
+`--no-raw` for a version to read, and the full version for someone who wants to
+check the details.
+
+## 8. `fordiag check`
 
 Checks whether a command is on the allowlist, **without sending anything**. This is
 useful for seeing what the tool accepts.
@@ -412,7 +459,7 @@ REJECTED: CAN ID 0x123 is outside the diagnostic range 0x700–0x7FF
 
 ---
 
-## 8. Files created by the tool
+## 9. Files created by the tool
 
 Everything goes under `--data-dir`, which is `fordiag-data/` unless you choose
 something else. The directory is listed in `.gitignore`.
@@ -447,6 +494,13 @@ The result of one DTC scan: start time, source, bus, and for each module every
 request, its outcome (DTCs, negative response, no response or error) and the raw
 response lines.
 
+Both result files also record the file name of their raw log (`raw_log`), so the
+report can include the right logs.
+
+### `fordiag-data/report-YYYYMMDD-HHMMSS.md`
+
+Reports written by `fordiag report` (unless `-o` is given).
+
 ### `fordiag-data/battery-<mode>-YYYYMMDD-HHMMSS.json`
 
 The result of one battery test: start time, source, analysis and **every
@@ -455,7 +509,7 @@ measurement** (`t_ms`, `volts`). These are the files `--summary` reads, and late
 
 ---
 
-## 9. Safety and the allowlist
+## 10. Safety and the allowlist
 
 The allowlist is enforced in the code (`src/command.rs`), not only in the
 documentation. There is no way to send arbitrary bytes, and fordiag has no command
@@ -502,7 +556,7 @@ If you need something that is not on the list, do it in **FORScan**.
 
 ---
 
-## 10. Troubleshooting
+## 11. Troubleshooting
 
 | Symptom | Possible causes and fixes |
 |---|---|
@@ -523,7 +577,7 @@ Attach the latest `raw-*.jsonl` when asking for help.
 
 ---
 
-## 11. Testing without a car
+## 12. Testing without a car
 
 ### Built-in simulator (`--mock`)
 
@@ -536,6 +590,8 @@ fordiag --mock --data-dir $D battery --rest --seconds 3
 fordiag --mock --data-dir $D battery --crank --seconds 8
 fordiag --mock --data-dir $D battery --charging --seconds 20
 fordiag --mock --data-dir $D battery --summary
+fordiag --mock --data-dir $D dtc --bus ms
+fordiag --data-dir $D report --vehicle "Test"
 ```
 
 ### Unit tests

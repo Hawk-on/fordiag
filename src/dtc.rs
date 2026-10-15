@@ -322,6 +322,9 @@ pub struct DtcScan {
     /// "hs" or "ms".
     pub bus: String,
     pub modules: Vec<ModuleResult>,
+    /// File name of the raw log for this run (in `<data-dir>/logs/`).
+    #[serde(default)]
+    pub raw_log: Option<String>,
 }
 
 impl DtcScan {
@@ -332,6 +335,36 @@ impl DtcScan {
         let path = dir.join(name);
         std::fs::write(&path, serde_json::to_string_pretty(self)?)?;
         Ok(path)
+    }
+
+    /// Find the latest saved scan for each bus in `dir` (HS first, then MS).
+    pub fn load_latest(dir: &Path) -> Result<Vec<DtcScan>> {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return Ok(Vec::new());
+        };
+        let mut files: Vec<PathBuf> = entries
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("dtc-") && n.ends_with(".json"))
+            })
+            .collect();
+        // File names contain bus and timestamp, so the last one per bus is the latest.
+        files.sort();
+        let mut out = Vec::new();
+        for bus in ["hs", "ms"] {
+            let prefix = format!("dtc-{bus}-");
+            let latest = files.iter().rfind(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with(&prefix))
+            });
+            if let Some(path) = latest {
+                out.push(serde_json::from_str(&std::fs::read_to_string(path)?)?);
+            }
+        }
+        Ok(out)
     }
 }
 

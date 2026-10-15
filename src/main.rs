@@ -8,6 +8,7 @@ mod command;
 mod dtc;
 mod elm;
 mod isotp;
+mod report;
 mod transport;
 
 use anyhow::Result;
@@ -76,6 +77,18 @@ enum Cmd {
         /// List the candidate modules and exit
         #[arg(long)]
         list: bool,
+    },
+    /// Write a Markdown report from the latest saved results (no cable needed)
+    Report {
+        /// Output file (default: <data-dir>/report-YYYYMMDD-HHMMSS.md)
+        #[arg(long, short = 'o')]
+        output: Option<PathBuf>,
+        /// Vehicle description to put at the top, e.g. "Ford S-Max Mk2 2.0 TDCi"
+        #[arg(long)]
+        vehicle: Option<String>,
+        /// Leave out the raw logs appendix
+        #[arg(long)]
+        no_raw: bool,
     },
     /// Check a command against the allowlist without sending it
     Check {
@@ -147,6 +160,11 @@ fn run() -> Result<()> {
         Cmd::Connect { bus, probe } => cmd_connect(&cli, *bus, *probe),
         Cmd::Battery(args) => cmd_battery(&cli, args),
         Cmd::Dtc { bus, modules, list } => cmd_dtc(&cli, *bus, modules, *list),
+        Cmd::Report {
+            output,
+            vehicle,
+            no_raw,
+        } => cmd_report(&cli, output.clone(), vehicle.clone(), *no_raw),
     }
 }
 
@@ -160,6 +178,11 @@ fn open(cli: &Cli, scenario: MockScenario) -> Result<(Elm, RawLog)> {
     };
     let elm = Elm::new(Box::new(Logged::new(inner, log.clone())));
     Ok((elm, log))
+}
+
+/// File name of a raw log, stored in results so the report can find it.
+fn log_name(log: &RawLog) -> Option<String> {
+    log.path().file_name().and_then(|n| n.to_str()).map(String::from)
 }
 
 /// Prompt the user and wait for Enter (skipped with `--yes` or `--mock`).
@@ -298,6 +321,7 @@ fn cmd_battery(cli: &Cli, args: &BatteryArgs) -> Result<()> {
         source: elm.describe(),
         analysis,
         samples,
+        raw_log: log_name(&log),
     };
     let path = test.save(&cli.data_dir)?;
     println!("\nResult saved: {}", path.display());
@@ -497,6 +521,7 @@ fn cmd_dtc(cli: &Cli, bus: Bus, names: &[String], list: bool) -> Result<()> {
         source: elm.describe(),
         bus: switch.to_lowercase(),
         modules: results,
+        raw_log: log_name(&log),
     };
     let path = scan.save(&cli.data_dir)?;
     println!("\nResult saved: {}", path.display());
@@ -533,6 +558,37 @@ fn print_module(r: &dtc::ModuleResult) {
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// report
+// ---------------------------------------------------------------------------
+
+fn cmd_report(cli: &Cli, output: Option<PathBuf>, vehicle: Option<String>, no_raw: bool) -> Result<()> {
+    let input = report::load(&cli.data_dir, vehicle, !no_raw)?;
+    let markdown = report::render(&input);
+    let path = output.unwrap_or_else(|| {
+        cli.data_dir
+            .join(format!("report-{}.md", input.generated.format("%Y%m%d-%H%M%S")))
+    });
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&path, &markdown)?;
+
+    let b = &input.battery;
+    let n_battery = [&b.rest, &b.crank, &b.charging].iter().filter(|t| t.is_some()).count();
+    println!("Report written: {}", path.display());
+    println!(
+        "  {} of 3 battery tests, {} DTC scan(s), {} raw log(s) included.",
+        n_battery,
+        input.dtc.len(),
+        input.raw_logs.len()
+    );
+    if !no_raw {
+        println!("  The raw logs make the report long; use --no-raw for a short version.");
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

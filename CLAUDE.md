@@ -99,6 +99,7 @@ cargo clippy                # lint
 cargo run -- --mock connect --probe
 cargo run -- --mock --data-dir /tmp/fd battery --crank --seconds 8
 cargo run -- --mock --data-dir /tmp/fd dtc --bus ms
+cargo run -- --data-dir /tmp/fd report --vehicle "Test"
 cargo run -- check "14 FF FF FF"     # must print REJECTED
 ```
 
@@ -114,6 +115,7 @@ ELM327-emulator`, `python3 -m elm -s car`, then `--port /dev/pts/N`).
 | `src/elm.rs` | `Elm`: init (HS/MS), `target` (`ATSH`/`ATCRA`), `ATI`/`ATDP`/`ATRV`, response cleaning, ELM errors, baud auto-detection |
 | `src/isotp.rs` | Reassembly of ISO-TP frames printed by the ELM (headers on) into messages |
 | `src/dtc.rs` | Candidate modules, DTC decoding (OBD 2-byte, UDS 3-byte + status), NRCs, FTB suggestions, `scan_module` |
+| `src/report.rs` | Markdown report: `load` (latest results + raw logs) and pure `render` |
 | `src/battery.rs` | Sampling, analysis (rest/crank/charging), persistence, overall assessment |
 | `src/main.rs` | CLI (clap), disclaimer and the `--mock` simulator scenarios |
 | `docs/MANUAL.md` | User manual: keep it up to date when the CLI changes |
@@ -123,7 +125,9 @@ Data flow: `main` → `Elm` → `Logged` (raw log) → `SerialTransport`/`MockTr
 Every transport calls `checked_wire()` before writing.
 
 Data is stored in `fordiag-data/` (git-ignored): `logs/raw-*.jsonl`,
-`battery-<mode>-*.json` and `dtc-<bus>-*.json`.
+`battery-<mode>-*.json`, `dtc-<bus>-*.json` (both record their `raw_log` file name)
+and `report-*.md`. Never put the VIN or registration number in the repository or in
+default report output.
 
 ## Status and roadmap
 
@@ -136,9 +140,10 @@ Data is stored in `fordiag-data/` (git-ignored): `logs/raw-*.jsonl`,
 - [ ] Ideas (read-only): software versions per module via `22` (`F188`, `F113`, …,
   unverified), freeze frame (OBD mode `02`, needs an allowlist entry with tests), long
   voltage log with a key press to mark when the 12 V outlet cuts out.
-- [ ] Phase 4: `report`. Markdown with date, battery tests, DTCs per module and the
-  raw log as an attachment.
-- [ ] Not tested against the real car yet. Phases 1–3 are tested with the mock and
-  the emulator.
+- [x] Phase 4: `report`. Markdown with date, summary, battery tests, DTCs per module
+  and the raw logs as an appendix (`--no-raw` to omit, `--vehicle` for a header line).
+  Uses the latest battery test of each kind and the latest DTC scan per bus.
+- [ ] Not tested against the real car yet. Phases 1–4 are tested with the mock (and
+  1–3 with the emulator).
 
 When the CLI changes, update both `README.md` and `docs/MANUAL.md`.

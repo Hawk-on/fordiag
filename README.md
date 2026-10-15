@@ -48,6 +48,7 @@ The binary ends up in `target/release/fordiag`.
 | `fordiag battery --summary` | Overall assessment of the latest saved tests |
 | `fordiag dtc [--bus hs\|ms] [--module NAME]` | Reads DTCs: OBD `03`/`07`/`0A` from the PCM and UDS `19 02 FF` from each candidate module. Never clears anything. |
 | `fordiag dtc --list` | Lists the candidate modules (addresses unverified) |
+| `fordiag report [--vehicle "TEXT"] [--no-raw]` | Markdown report from the latest saved results, with raw logs as an appendix |
 | `fordiag check "<command>"` | Checks a command against the allowlist **without** sending it |
 
 Global flags: `--port /dev/ttyUSB0`, `--baud 38400`, `--mock` (built-in simulator),
@@ -67,6 +68,7 @@ fordiag battery --charging              # engine idling for 3 minutes
 fordiag battery --summary
 fordiag dtc --bus hs                    # switch on HS, ignition on, engine off
 fordiag dtc --bus ms                    # switch on MS
+fordiag report --vehicle "Ford S-Max Mk2 2.0 TDCi"   # at home, no cable needed
 ```
 
 See the [manual](docs/MANUAL.md) for what to do physically before each test and how
@@ -78,6 +80,7 @@ to interpret the results.
   received) with timestamps
 * `fordiag-data/battery-*.json`: results and every measurement from the battery tests
 * `fordiag-data/dtc-*.json`: DTC scan results per module, with raw responses
+* `fordiag-data/report-*.md`: reports from `fordiag report`
 
 ## Testing against an ELM327 emulator (optional)
 
@@ -95,6 +98,7 @@ fordiag --port /dev/pts/3 connect --probe
 * `battery.rs`: voltage sampling and analysis
 * `isotp.rs`: reassembly of multi-frame (ISO-TP) responses
 * `dtc.rs`: candidate modules, DTC decoding and module scans
+* `report.rs`: the Markdown report
 * `main.rs`: CLI and the `--mock` simulator
 
 ## Status
@@ -102,7 +106,7 @@ fordiag --port /dev/pts/3 connect --probe
 - [x] Phase 1: connection
 - [x] Phase 2: battery status
 - [x] Phase 3: DTCs (`fordiag dtc`), not yet tested on the car
-- [ ] Phase 4: report (`fordiag report`)
+- [x] Phase 4: report (`fordiag report`)
 
 ## License
 
