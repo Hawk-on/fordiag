@@ -14,6 +14,11 @@ that SYNC 2 and the radio (ACM) got out of sync, and that the 12 V outlet cut ou
 every 3–4 seconds. The suspicion is that the battery monitoring system (BMS) is
 driving load shedding.
 
+Known context from other owners (recall 18P11 for the battery monitoring sensor,
+charger connection point vs. the BMS, BMS reset caveats, SYNC/ACM after flat
+batteries) is collected in `docs/BACKGROUND.md`. It is community information, not
+verified on this car.
+
 Everything that **writes** to the car is done by the owner in FORScan (under Wine).
 FORScan and fordiag cannot use the cable at the same time.
 
@@ -99,6 +104,7 @@ ELM327-emulator`, `python3 -m elm -s car`, then `--port /dev/pts/N`).
 | `src/battery.rs` | Sampling, analysis (rest/crank/charging), persistence, overall assessment |
 | `src/main.rs` | CLI (clap), disclaimer and the `--mock` simulator scenarios |
 | `docs/MANUAL.md` | User manual: keep it up to date when the CLI changes |
+| `docs/BACKGROUND.md` | Research notes and sources from other owners (unverified) |
 
 Data flow: `main` → `Elm` → `Logged` (raw log) → `SerialTransport`/`MockTransport`.
 Every transport calls `checked_wire()` before writing.
