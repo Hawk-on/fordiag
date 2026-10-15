@@ -10,6 +10,8 @@ mod elm;
 mod isotp;
 mod replay;
 mod report;
+#[cfg(test)]
+mod safety_tests;
 mod transport;
 
 use anyhow::Result;

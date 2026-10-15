@@ -551,6 +551,8 @@ Other safety measures:
 
 - Right before anything is written, the text is parsed again. It must produce exactly
   the same command, or it is not sent.
+- Text commands (`fordiag check`) accept only spaces and tabs as separators. Line
+  breaks and other control characters are rejected.
 - fordiag never sends an empty line. A bare CR makes the ELM327 repeat the *previous*
   command, which could have been something FORScan sent.
 
@@ -605,6 +607,39 @@ cargo test
 The tests cover the allowlist (all 256 service bytes), response parsing, init
 sequences against `MockTransport`, ISO-TP reassembly, DTC decoding, module scans
 with recorded answers, and the analyses with their thresholds.
+
+### Safety tests
+
+`cargo test` also runs the safety tests (`src/safety_tests.rs` and
+`tests/cli_safety.rs`). They take about 15 seconds:
+
+- **Exhaustive allowlist:** every byte string of 0–3 bytes (16.8 million) is accepted
+  exactly when it is one of the allowed read forms, and is sent byte for byte as
+  given. Longer strings are checked with 500 000 random samples. Every forbidden
+  service is rejected with any arguments.
+- **AT commands:** every AT command of up to four characters, and every `ATSH`/`ATCRA`
+  with a 3-digit ID, is accepted exactly when it is on the list. Dangerous commands
+  (`ATCAF0`, `ATMA`, `ATPP…`, `ATCV…`, other protocols, …) are rejected.
+- **Wire format:** all 66 000+ commands that can be constructed give a non-empty
+  string of only letters and digits, which parses back to the same command.
+- **Text tricks:** line breaks, control characters, separators, prefixes such as
+  `0x`, and look-alike characters (full-width or Arabic digits, Cyrillic letters) are
+  rejected, so a second command can never ride along.
+- **Robustness:** random and broken responses never crash the parsers or a module
+  scan.
+- **Tripwires in the source code:**
+  - Only `SerialTransport` opens and writes to the serial port.
+  - Every transport takes a `&Command` and calls `checked_wire`.
+  - The `Transport` trait has no other methods.
+- **End to end with the binary:**
+  - A full `--mock` session (all commands) only sends commands that `fordiag check`
+    accepts.
+  - Without `--yes` and without a keyboard, nothing is sent.
+  - A tampered log cannot smuggle a command in through `--replay`.
+
+The tests have also been checked against deliberate mistakes in the code (a widened
+CAN ID range, line breaks accepted as separators, an extra write to the port). Each
+mistake made at least one test fail.
 
 ### Replaying a recording (`--replay`)
 

@@ -20,6 +20,22 @@
 use std::fmt;
 use thiserror::Error;
 
+/// The only characters accepted as separators in text commands: space and tab.
+/// Line breaks and other control characters are rejected, so a second command
+/// can never ride along in the same text (e.g. "ATZ\r14").
+fn is_separator(c: char) -> bool {
+    c == ' ' || c == '\t'
+}
+
+/// Remove separators from the text; `None` if it contains any other control
+/// character.
+fn strip_separators(text: &str) -> Option<String> {
+    if text.chars().any(|c| c.is_control() && !is_separator(c)) {
+        return None;
+    }
+    Some(text.chars().filter(|&c| !is_separator(c)).collect())
+}
+
 /// The reason a command was rejected.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum Forbidden {
@@ -197,12 +213,8 @@ impl AtCommand {
     /// Parse an AT command written as text. Whitespace and letter case do not
     /// matter. Anything not on the list is rejected.
     pub fn parse(text: &str) -> Result<Self, Forbidden> {
-        let s: String = text
-            .chars()
-            .filter(|c| !c.is_whitespace())
-            .collect::<String>()
-            .to_uppercase();
-        let reject = || Forbidden::AtNotAllowed(text.trim().to_string());
+        let reject = || Forbidden::AtNotAllowed(text.trim().escape_debug().to_string());
+        let s = strip_separators(text).ok_or_else(reject)?.to_uppercase();
         let rest = s.strip_prefix("AT").ok_or_else(reject)?;
 
         let cmd = match rest {
@@ -383,7 +395,7 @@ impl DiagRequest {
 
 /// Parse hex text such as "19 02 FF" or "1902ff" into bytes.
 fn parse_hex_bytes(text: &str) -> Result<Vec<u8>, Forbidden> {
-    let compact: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+    let compact = strip_separators(text).ok_or_else(|| Forbidden::BadHex(text.escape_debug().to_string()))?;
     if compact.is_empty() {
         return Err(Forbidden::Empty);
     }
@@ -418,8 +430,9 @@ impl Command {
     /// Parse text into a command. Text starting with "AT" is parsed as an AT
     /// command, anything else as a hex diagnostic request.
     pub fn parse(text: &str) -> Result<Self, Forbidden> {
-        let t = text.trim();
-        if t.len() >= 2 && t[..2].eq_ignore_ascii_case("AT") {
+        let t = text.trim_matches(is_separator);
+        // `get` instead of slicing: the text may start with a multi-byte character.
+        if t.get(..2).is_some_and(|p| p.eq_ignore_ascii_case("AT")) {
             AtCommand::parse(t).map(Command::At)
         } else {
             DiagRequest::from_hex(t).map(Command::Diag)

@@ -32,7 +32,7 @@ Use FORScan for anything like that.
 
 ```sh
 cargo build --release
-cargo test            # everything is tested against MockTransport, no car needed
+cargo test            # unit, replay and safety tests; no car needed (~15 s)
 ```
 
 The binary ends up in `target/release/fordiag`.
@@ -108,6 +108,7 @@ read-only commands and reads the results. See the manual, chapter 13.
 * `isotp.rs`: reassembly of multi-frame (ISO-TP) responses
 * `dtc.rs`: candidate modules, DTC decoding and module scans
 * `report.rs`: the Markdown report
+* `safety_tests.rs`, `tests/cli_safety.rs`: exhaustive and end-to-end safety tests
 * `replay.rs`: replay of recorded raw logs (`--replay`, regression tests in `fixtures/replay/`)
 * `main.rs`: CLI and the `--mock` simulator
 

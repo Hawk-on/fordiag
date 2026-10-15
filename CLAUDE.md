@@ -36,7 +36,10 @@ FORScan and fordiag cannot use the cable at the same time.
    point to FORScan.** Never extend the list with writing or session-changing
    services.
 5. A new allowlist variant requires tests in `command.rs`: a round trip
-   (`all_commands_survive_round_trip`) and rejection of malformed input.
+   (`all_commands_survive_round_trip`) and rejection of malformed input. Also update
+   the independent definitions in `src/safety_tests.rs` (`is_allowed_form`,
+   `is_allowed_at`, `all_commands`); the safety tests must never be weakened or
+   skipped to make a change pass.
 6. Never send an empty line (CR). The ELM327 would repeat the previous command.
 7. **Do not guess** Ford-specific DIDs or module addresses and present them as facts.
    Mark them as **unverified** until a module has actually responded.
@@ -93,7 +96,7 @@ bus.
 
 ```sh
 cargo build                 # build
-cargo test                  # all tests, no car needed
+cargo test                  # all tests incl. safety tests (~15 s), no car needed
 cargo fmt                   # formatting (rustfmt.toml: max_width = 120)
 cargo clippy                # lint
 cargo run -- --mock connect --probe
@@ -118,6 +121,8 @@ pattern that also matches your own shell command line when stopping it.
 | `src/isotp.rs` | Reassembly of ISO-TP frames printed by the ELM (headers on) into messages |
 | `src/dtc.rs` | Candidate modules, DTC decoding (OBD 2-byte, UDS 3-byte + status), NRCs, FTB suggestions, `scan_module` |
 | `src/replay.rs` | `ReplayTransport`: strict in-order replay of a raw log (`--replay`); regression test over `fixtures/replay/dtc-*.jsonl` (+ `.expected.json`) |
+| `src/safety_tests.rs` | Test-only: exhaustive allowlist checks, wire format, text tricks, fuzzing of parsers, source tripwires |
+| `tests/cli_safety.rs` | End-to-end safety tests against the compiled binary |
 | `src/report.rs` | Markdown report: `load` (latest results + raw logs) and pure `render` |
 | `src/battery.rs` | Sampling, analysis (rest/crank/charging), persistence, overall assessment |
 | `src/main.rs` | CLI (clap), disclaimer and the `--mock` simulator scenarios |
