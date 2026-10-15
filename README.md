@@ -28,6 +28,7 @@ Use FORScan for anything like that.
 **Documentation:**
 * [`docs/MANUAL.md`](docs/MANUAL.md): the full user manual (every command, interpretation, troubleshooting)
 * [`docs/BACKGROUND.md`](docs/BACKGROUND.md): what other S-Max Mk2 / Galaxy / Mondeo owners have found (recall 18P11, BMS and charging), with sources
+* [`REVIEW.md`](REVIEW.md): review guide (used by the `review` Claude Code skill and, in short form, by Copilot)
 * [`CLAUDE.md`](CLAUDE.md): development guide (safety rules, conventions, architecture, roadmap)
 
 ## Install

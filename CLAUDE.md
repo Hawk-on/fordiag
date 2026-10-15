@@ -134,6 +134,9 @@ pattern that also matches your own shell command line when stopping it.
 | `src/battery.rs` | Sampling, analysis (rest/crank/charging), persistence, overall assessment |
 | `src/main.rs` | CLI (clap), disclaimer and the `--mock` simulator scenarios |
 | `docs/MANUAL.md` | User manual: keep it up to date when the CLI changes |
+| `REVIEW.md` | Review guide: blocking rules, what not to flag, decisions not to re-raise |
+| `.claude/skills/review/SKILL.md` | Claude Code skill for a token-lean review against `REVIEW.md` |
+| `.github/copilot-instructions.md` | Short version of `REVIEW.md` for Copilot code review |
 | `.claude/skills/fordiag/SKILL.md` | Claude Code skill for running fordiag with the owner on their PC |
 | `tools/ci_emulator.sh` | CI end-to-end test of the serial layer against the Ford emulator scenario |
 | `.github/workflows/` | CI (`ci.yml`), optional Windows (`windows.yml`), release (`release.yml`) |
@@ -175,4 +178,6 @@ default report output.
 - [ ] Not tested against the real car yet. Phases 1–4 are tested with the mock (and
   1–3 with the emulator).
 
-When the CLI changes, update both `README.md` and `docs/MANUAL.md`.
+When the CLI changes, update both `README.md` and `docs/MANUAL.md`. When a rule or a
+deliberate decision changes, update `REVIEW.md` (and the short
+`.github/copilot-instructions.md`) as well.
