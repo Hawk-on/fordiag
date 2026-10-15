@@ -642,8 +642,9 @@ The raw log and the result file from the same run belong together (same timestam
 Recordings contain no VIN, but check them before committing them to a public
 repository.
 
-The repository currently has two fixtures: an HS scan against ELM327-emulator and an
-MS scan against `--mock`.
+The repository currently has three fixtures: an HS scan against ELM327-emulator's
+"car" scenario, an HS scan against the Ford scenario below, and an MS scan against
+`--mock`.
 
 ### ELM327 emulator (tests the serial layer)
 
@@ -654,3 +655,30 @@ fordiag --port /dev/pts/3 connect --probe
 ```
 
 The emulator reports about 13 V, so `--rest` will say "Invalid". That is expected.
+
+### Ford-like emulator scenario (`tools/ford_emulator.py`)
+
+The built-in "car" scenario only has an engine control module. `tools/ford_emulator.py`
+starts the same emulator with a scenario called `ford_cd4`, which adds made-up
+`19 02 FF` answers on the usual Ford addresses:
+
+| Module | Answer (made up) | Exercises |
+|---|---|---|
+| BCM 726 | three DTCs | multi-frame (ISO-TP) answer |
+| ACM 727 | `7F 19 31` | negative response |
+| APIM 7D0 | one DTC | single frame |
+| IPC 720 | no DTCs | empty positive answer |
+| PCM 7E0 | no UDS DTCs, one pending OBD DTC | OBD answer without count byte |
+
+It also accepts `ATPB 81 04`, so `--bus ms` can be tested (the real emulator does not
+know `ATPB`).
+
+```sh
+python3 tools/ford_emulator.py           # prints e.g. /dev/pts/3
+fordiag --port /dev/pts/3 -y dtc --bus hs
+fordiag --port /dev/pts/3 -y dtc --bus ms
+```
+
+The emulator does not separate HS and MS, so every module answers on both buses, and
+`ATDP` always reports 500 kbit/s. The data says nothing about any real car. The
+emulator has its own licence (CC BY-NC-SA 4.0); the script only uses it.

@@ -90,6 +90,9 @@ python3 -m elm -s car        # prints e.g. /dev/pts/3
 fordiag --port /dev/pts/3 connect --probe
 ```
 
+For a Ford-like scenario (BCM, ACM, APIM, IPC with made-up DTCs, and MS-CAN setup):
+`python3 tools/ford_emulator.py`. See the manual, chapter 12.
+
 ## Code overview
 
 * `command.rs`: allowlist (types for AT commands and diagnostic requests) and tests

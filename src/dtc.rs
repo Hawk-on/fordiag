@@ -163,25 +163,32 @@ pub fn code_category(code: &str) -> &'static str {
     }
 }
 
-/// Parse a positive response to OBD mode 03, 07 or 0A on CAN:
-/// `[service + 0x40, count, hi, lo, hi, lo, ...]`.
+/// Parse a positive response to OBD mode 03, 07 or 0A on CAN.
+///
+/// SAE J1979 on CAN includes a count byte: `[service + 0x40, count, hi, lo, ...]`.
+/// Some ECUs (and ELM327-emulator) leave the count out: `[service + 0x40, hi, lo, ...]`.
+/// The two can be told apart by the length: with the count byte the length is
+/// always even, without it always odd. In the second form, `00 00` pairs are
+/// padding and are skipped.
 pub fn parse_obd_dtcs(data: &[u8]) -> Result<Vec<Dtc>, String> {
     if data.len() < 2 {
         return Err("response too short".into());
     }
-    let count = data[1] as usize;
-    let pairs = &data[2..];
-    if pairs.len() < count * 2 {
-        return Err(format!("expected {count} DTCs, got {} bytes", pairs.len()));
+    let to_dtc = |c: &[u8]| Dtc {
+        code: decode_code(c[0], c[1]),
+        ftb: None,
+        status: None,
+    };
+    if data.len() % 2 == 0 {
+        let count = data[1] as usize;
+        let pairs = &data[2..];
+        if pairs.len() < count * 2 {
+            return Err(format!("expected {count} DTCs, got {} bytes", pairs.len()));
+        }
+        Ok(pairs[..count * 2].chunks(2).map(to_dtc).collect())
+    } else {
+        Ok(data[1..].chunks(2).filter(|c| c != &[0, 0]).map(to_dtc).collect())
     }
-    Ok(pairs[..count * 2]
-        .chunks(2)
-        .map(|c| Dtc {
-            code: decode_code(c[0], c[1]),
-            ftb: None,
-            status: None,
-        })
-        .collect())
 }
 
 /// Parse a positive response to UDS `19 02 mm`:
@@ -513,7 +520,12 @@ mod tests {
         assert_eq!(parse_obd_dtcs(&[0x43, 0x00]).unwrap(), vec![]);
         let d = parse_obd_dtcs(&[0x47, 0x02, 0x05, 0x63, 0xC1, 0x00]).unwrap();
         assert_eq!(d.iter().map(|x| x.display()).collect::<Vec<_>>(), ["P0563", "U0100"]);
-        assert!(parse_obd_dtcs(&[0x43, 0x02, 0x05]).is_err());
+        assert!(parse_obd_dtcs(&[0x43, 0x02, 0x05, 0x63]).is_err());
+        // Without the count byte (odd length), as sent by some ECUs and the emulator.
+        let d = parse_obd_dtcs(&[0x47, 0x05, 0x63]).unwrap();
+        assert_eq!(d.iter().map(|x| x.display()).collect::<Vec<_>>(), ["P0563"]);
+        let d = parse_obd_dtcs(&[0x43, 0x01, 0x33, 0x00, 0x00, 0xC1, 0x00]).unwrap();
+        assert_eq!(d.iter().map(|x| x.display()).collect::<Vec<_>>(), ["P0133", "U0100"]);
     }
 
     #[test]

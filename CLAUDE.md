@@ -104,7 +104,9 @@ cargo run -- check "14 FF FF FF"     # must print REJECTED
 ```
 
 The serial layer can be tested against `ELM327-emulator` (`pip install
-ELM327-emulator`, `python3 -m elm -s car`, then `--port /dev/pts/N`).
+ELM327-emulator`, `python3 -m elm -s car`, then `--port /dev/pts/N`), or against the
+Ford-like scenario with `python3 tools/ford_emulator.py`. Do not use `pkill -f` with a
+pattern that also matches your own shell command line when stopping it.
 
 ## Architecture
 
@@ -141,7 +143,9 @@ default report output.
 - [x] Replay of recorded raw logs (`--replay`) and recordings as regression tests in
   `fixtures/replay/`. When the owner shares real recordings from the car, add them
   there (raw log + matching `dtc-*.json` as `.expected.json`), after checking them.
-- [ ] Ford-like scenario for ELM327-emulator (BCM/ACM/APIM on 726/727/7D0).
+- [x] Ford-like scenario for ELM327-emulator: `tools/ford_emulator.py` (`ford_cd4`,
+  made-up data). It found that some ECUs send OBD 03/07/0A answers without the count
+  byte; `parse_obd_dtcs` now handles both forms.
 - [ ] Claude Code skill around fordiag (read-only), for use on the owner's own PC.
 - [ ] Ideas (read-only): software versions per module via `22` (`F188`, `F113`, …,
   unverified), freeze frame (OBD mode `02`, needs an allowlist entry with tests), long
