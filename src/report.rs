@@ -28,8 +28,8 @@ pub struct RawLogFile {
     pub name: String,
     /// What the log belongs to, e.g. "battery: rest".
     pub belongs_to: String,
-    /// `None` if the file could not be found.
-    pub lines: Option<Vec<String>>,
+    /// The formatted lines, or why they are not included.
+    pub lines: Result<Vec<String>, &'static str>,
 }
 
 // ---------------------------------------------------------------------------
@@ -53,9 +53,15 @@ pub fn load(dir: &Path, vehicle: Option<String>, include_raw: bool) -> Result<Re
         }
         for (name, belongs_to) in wanted {
             let Some(name) = name else { continue };
-            let lines = std::fs::read_to_string(dir.join("logs").join(name))
-                .ok()
-                .map(|text| text.lines().map(format_log_line).collect());
+            let lines = if !is_plain_log_name(name) {
+                // A result file is just JSON and may come from elsewhere: never let
+                // it point the report at another file on this machine.
+                Err("file name rejected: not a plain raw-*.jsonl name in the logs directory")
+            } else {
+                std::fs::read_to_string(dir.join("logs").join(name))
+                    .map(|text| text.lines().map(format_log_line).collect())
+                    .map_err(|_| "log file not found")
+            };
             raw_logs.push(RawLogFile {
                 name: name.clone(),
                 belongs_to,
@@ -71,6 +77,16 @@ pub fn load(dir: &Path, vehicle: Option<String>, include_raw: bool) -> Result<Re
         dtc,
         raw_logs,
     })
+}
+
+/// True for a plain file name such as `raw-20261018-101500.jsonl`: no directory
+/// parts, no `..`, no absolute path, on any platform.
+fn is_plain_log_name(name: &str) -> bool {
+    name.starts_with("raw-")
+        && name.ends_with(".jsonl")
+        && !name.contains(['/', '\\', ':'])
+        && !name.contains("..")
+        && Path::new(name).file_name().and_then(|n| n.to_str()) == Some(name)
 }
 
 /// Turn one JSON line from the raw log into `timestamp dir data`, with control
@@ -412,7 +428,7 @@ fn render_raw_logs(w: &mut String, logs: &[RawLogFile]) {
     for log in logs {
         let _ = writeln!(w, "\n### {} ({})\n", log.name, log.belongs_to);
         match &log.lines {
-            Some(lines) => {
+            Ok(lines) => {
                 // Four tildes, so nothing inside the log can end the block early.
                 let _ = writeln!(w, "~~~~text");
                 for l in lines {
@@ -420,8 +436,8 @@ fn render_raw_logs(w: &mut String, logs: &[RawLogFile]) {
                 }
                 let _ = writeln!(w, "~~~~");
             }
-            None => {
-                let _ = writeln!(w, "(log file not found)");
+            Err(why) => {
+                let _ = writeln!(w, "({why})");
             }
         }
     }
@@ -563,6 +579,45 @@ mod tests {
         let line = r#"{"ts":"2026-10-18T08:00:00.000+02:00","dir":"rx","data":"OK\r\r"}"#;
         assert_eq!(format_log_line(line), "2026-10-18T08:00:00.000+02:00 rx   OK\\r\\r");
         assert_eq!(format_log_line("not json"), "not json");
+    }
+
+    #[test]
+    fn only_plain_log_names_are_accepted() {
+        assert!(is_plain_log_name("raw-20261018-080000.jsonl"));
+        for bad in [
+            "../raw-x.jsonl",
+            "logs/raw-x.jsonl",
+            "/etc/passwd",
+            "/tmp/raw-x.jsonl",
+            "raw-..jsonl",
+            "..\\raw-x.jsonl",
+            "C:raw-x.jsonl",
+            "secret.txt",
+            "raw-x.json",
+            "",
+            "..",
+        ] {
+            assert!(!is_plain_log_name(bad), "{bad:?} should be rejected");
+        }
+    }
+
+    #[test]
+    fn report_never_includes_files_outside_the_logs_directory() {
+        let dir = std::env::temp_dir().join(format!("fordiag-report-evil-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("logs")).unwrap();
+        // A file outside logs/ that a tampered result points at.
+        std::fs::write(dir.join("secret.txt"), "TOP-SECRET-CONTENT\n").unwrap();
+        let mut test = rest_test("test");
+        test.raw_log = Some("../secret.txt".into());
+        test.save(&dir).unwrap();
+
+        let input = load(&dir, None, true).unwrap();
+        assert!(input.raw_logs[0].lines.is_err());
+        let md = render(&input);
+        assert!(!md.contains("TOP-SECRET-CONTENT"));
+        assert!(md.contains("file name rejected"));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

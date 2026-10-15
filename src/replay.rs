@@ -22,6 +22,26 @@ use std::cell::Cell;
 use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
+use thiserror::Error;
+
+/// The replay no longer matches the recording. Unlike errors that were recorded
+/// (the car or the cable failed back then), this means the run itself is
+/// invalid, so callers stop instead of saving a result.
+#[derive(Debug, Error)]
+pub enum ReplayError {
+    #[error("replay of {name} ended: there is no recorded response for \"{wire}\" (step {step})")]
+    Ended { name: String, wire: String, step: usize },
+    #[error(
+        "replay of {name} diverged at step {step}: the recording sent \"{recorded}\", now \"{wire}\". \
+         Run the same command with the same options as when it was recorded."
+    )]
+    Diverged {
+        name: String,
+        step: usize,
+        recorded: String,
+        wire: String,
+    },
+}
 
 /// One recorded command and what came back.
 #[derive(Debug, Clone, PartialEq)]
@@ -107,26 +127,31 @@ impl Transport for ReplayTransport {
         let wire = checked_wire(cmd)?;
         let i = self.pos.get();
         let Some(step) = self.steps.get(i) else {
-            bail!(
-                "replay of {} ended: there is no recorded response for \"{wire}\" (step {})",
-                self.name,
-                i + 1
-            );
+            return Err(ReplayError::Ended {
+                name: self.name.clone(),
+                wire,
+                step: i + 1,
+            }
+            .into());
         };
         if step.tx != wire {
-            bail!(
-                "replay of {} diverged at step {}: the recording sent \"{}\", now \"{wire}\". \
-                 Run the same command with the same options as when it was recorded.",
-                self.name,
-                i + 1,
-                step.tx
-            );
+            return Err(ReplayError::Diverged {
+                name: self.name.clone(),
+                step: i + 1,
+                recorded: step.tx.clone(),
+                wire,
+            }
+            .into());
         }
         self.pos.set(i + 1);
         match &step.rx {
             Ok(rx) => Ok(rx.clone()),
-            Err(e) if e.starts_with("timeout") => Err(TransportError::Timeout { partial: String::new() }.into()),
-            Err(e) => bail!("recorded error: {e}"),
+            // Give back exactly the logged text, so results match the original run.
+            Err(e) => Err(TransportError::Recorded {
+                message: e.clone(),
+                timeout: e.starts_with("timeout"),
+            }
+            .into()),
         }
     }
 
@@ -146,8 +171,33 @@ mod tests {
 {"ts":"t","dir":"tx","data":"ATZ"}
 {"ts":"t","dir":"rx","data":"\r\rELM327 v1.5\r\r"}
 {"ts":"t","dir":"tx","data":"ATI"}
-{"ts":"t","dir":"err","data":"timeout: no response from the ELM327 (received so far: \"\")"}
+{"ts":"t","dir":"err","data":"timeout: no response from the ELM327 (received so far: \"7E8 10\")"}
 "#;
+
+    #[test]
+    fn recorded_non_timeout_errors_keep_their_text() {
+        let log = r#"{"ts":"t","dir":"tx","data":"ATZ"}
+{"ts":"t","dir":"err","data":"Input/output error (os error 5)"}
+"#;
+        let mut t = ReplayTransport::new(parse_log(log).unwrap(), "test");
+        let err = t
+            .exchange(&Command::At(AtCommand::Reset), Duration::from_secs(1))
+            .unwrap_err();
+        assert_eq!(err.to_string(), "Input/output error (os error 5)");
+        assert!(!err.downcast_ref::<TransportError>().unwrap().is_timeout());
+    }
+
+    #[test]
+    fn scan_stops_when_replay_diverges() {
+        // The MS mock recording starts with the PCM; asking only for the BCM must
+        // fail instead of producing a result full of errors.
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/replay/dtc-ms-mock.jsonl");
+        let mut elm = Elm::new(Box::new(ReplayTransport::open(&path).unwrap()));
+        elm.init(Bus::Ms).unwrap();
+        elm.prepare_for_dtc().unwrap();
+        let err = dtc::scan_module(&mut elm, dtc::find_module("BCM").unwrap(), false).unwrap_err();
+        assert!(err.downcast_ref::<ReplayError>().is_some(), "{err:#}");
+    }
 
     #[test]
     fn parses_tx_rx_and_errors() {
@@ -168,18 +218,29 @@ mod tests {
             "\r\rELM327 v1.5\r\r"
         );
         let err = t.exchange(&Command::At(AtCommand::Identify), d).unwrap_err();
+        // The recorded text is given back unchanged, and it is still a timeout.
+        assert_eq!(
+            err.to_string(),
+            "timeout: no response from the ELM327 (received so far: \"7E8 10\")"
+        );
         assert!(
-            err.downcast_ref::<TransportError>().is_some(),
+            err.downcast_ref::<TransportError>()
+                .is_some_and(TransportError::is_timeout),
             "timeout should replay as timeout"
         );
-        assert!(
-            t.exchange(&Command::At(AtCommand::Identify), d).is_err(),
-            "recording has ended"
-        );
+        let err = t.exchange(&Command::At(AtCommand::Identify), d).unwrap_err();
+        assert!(matches!(
+            err.downcast_ref::<ReplayError>(),
+            Some(ReplayError::Ended { .. })
+        ));
 
         let mut t = ReplayTransport::new(parse_log(LOG).unwrap(), "test");
         let err = t.exchange(&Command::At(AtCommand::EchoOff), d).unwrap_err();
         assert!(err.to_string().contains("diverged"));
+        assert!(matches!(
+            err.downcast_ref::<ReplayError>(),
+            Some(ReplayError::Diverged { .. })
+        ));
     }
 
     /// Re-run a recorded `fordiag dtc` scan: the bus and the modules are taken

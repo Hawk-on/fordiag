@@ -217,7 +217,9 @@ pub fn open_serial(path: &str, baud: Option<u32>, log: &RawLog) -> Result<Box<dy
                     last_err = Some(anyhow!("unexpected response: {resp:?}"));
                 }
                 Err(e) => {
-                    let timeout = e.downcast_ref::<TransportError>().is_some();
+                    let timeout = e
+                        .downcast_ref::<TransportError>()
+                        .is_some_and(TransportError::is_timeout);
                     log.write("info", &format!("no response @ {b}: {e:#}"));
                     last_err = Some(e);
                     if timeout {

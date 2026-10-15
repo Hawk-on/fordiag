@@ -12,6 +12,7 @@
 use crate::command::{CanId, DiagRequest, DtcReport, ObdRequest, UdsRequest};
 use crate::elm::{DiagReply, Elm};
 use crate::isotp;
+use crate::replay::ReplayError;
 use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -383,7 +384,10 @@ enum Expect {
 }
 
 /// Send one read request to the currently targeted module and interpret the answer.
-fn read_one(elm: &mut Elm, label: &str, req: DiagRequest, response_id: CanId, expect: Expect) -> Read {
+/// Errors that mean the run itself is invalid (a replay that no longer matches its
+/// recording) are returned as `Err`; everything the car or the cable did is an
+/// [`Outcome`].
+fn read_one(elm: &mut Elm, label: &str, req: DiagRequest, response_id: CanId, expect: Expect) -> Result<Read> {
     let wire = req.to_wire();
     let service = req.to_bytes()[0];
     let make = |outcome, raw| Read {
@@ -394,21 +398,22 @@ fn read_one(elm: &mut Elm, label: &str, req: DiagRequest, response_id: CanId, ex
     };
 
     let lines = match elm.diag(req) {
-        Ok(DiagReply::NoData) => return make(Outcome::NoResponse, vec![]),
+        Ok(DiagReply::NoData) => return Ok(make(Outcome::NoResponse, vec![])),
         Ok(DiagReply::Data(lines)) => lines,
+        Err(e) if e.downcast_ref::<ReplayError>().is_some() => return Err(e),
         Err(e) => {
-            return make(
+            return Ok(make(
                 Outcome::Error {
                     message: format!("{e:#}"),
                 },
                 vec![],
-            );
+            ));
         }
     };
 
     let messages = match isotp::reassemble(&lines) {
         Ok(m) => m,
-        Err(e) => return make(Outcome::Error { message: e.to_string() }, lines),
+        Err(e) => return Ok(make(Outcome::Error { message: e.to_string() }, lines)),
     };
 
     // Only messages from the module we asked (the receive filter should already
@@ -416,14 +421,17 @@ fn read_one(elm: &mut Elm, label: &str, req: DiagRequest, response_id: CanId, ex
     let ours: Vec<&isotp::Message> = messages.iter().filter(|m| m.id == response_id.value()).collect();
     let is_pending = |m: &&isotp::Message| m.data.len() >= 3 && m.data[0] == 0x7F && m.data[2] == 0x78;
     let Some(msg) = ours.iter().rev().find(|m| !is_pending(m)).or(ours.last()) else {
-        return make(Outcome::NoResponse, lines);
+        return Ok(make(Outcome::NoResponse, lines));
     };
     let d = &msg.data;
 
     let outcome = if d.len() >= 3 && d[0] == 0x7F {
         if d[2] == 0x78 {
-            Outcome::Error {
-                message: "module said \"response pending\" but no final answer arrived; try again".into(),
+            // The module did answer (so its address is confirmed), but only with
+            // "response pending" and never with the final answer.
+            Outcome::Negative {
+                nrc: 0x78,
+                meaning: "response pending, but no final answer arrived; try again".into(),
             }
         } else {
             Outcome::Negative {
@@ -445,7 +453,7 @@ fn read_one(elm: &mut Elm, label: &str, req: DiagRequest, response_id: CanId, ex
             message: format!("unexpected response {:02X?}", d),
         }
     };
-    make(outcome, lines)
+    Ok(make(outcome, lines))
 }
 
 /// Read DTCs from one module. With `include_obd`, also run OBD modes 03/07/0A
@@ -465,6 +473,9 @@ pub fn scan_module(elm: &mut Elm, module: &Module, include_obd: bool) -> Result<
     };
 
     if let Err(e) = elm.target(request) {
+        if e.downcast_ref::<ReplayError>().is_some() {
+            return Err(e);
+        }
         result.reads.push(Read {
             label: "set target".into(),
             request: format!("ATSH{request} / ATCRA{response}"),
@@ -482,13 +493,13 @@ pub fn scan_module(elm: &mut Elm, module: &Module, include_obd: bool) -> Result<
             ("OBD pending (07)", ObdRequest::PendingDtcs),
             ("OBD permanent (0A)", ObdRequest::PermanentDtcs),
         ] {
-            let read = read_one(elm, label, DiagRequest::Obd(r), response, Expect::Obd);
+            let read = read_one(elm, label, DiagRequest::Obd(r), response, Expect::Obd)?;
             result.reads.push(read);
         }
     }
 
     let uds = DiagRequest::Uds(UdsRequest::ReadDtcInformation(DtcReport::ByStatusMask(0xFF)));
-    let read = read_one(elm, "UDS 19 02 FF", uds, response, Expect::Uds);
+    let read = read_one(elm, "UDS 19 02 FF", uds, response, Expect::Uds)?;
     result.reads.push(read);
     Ok(result)
 }
@@ -590,6 +601,15 @@ mod tests {
         let neg = scan_module(&mut elm, find_module("ACM").unwrap(), false).unwrap();
         assert!(neg.responded());
         assert!(matches!(neg.reads[0].outcome, Outcome::Negative { nrc: 0x31, .. }));
+    }
+
+    #[test]
+    fn lone_pending_still_counts_as_a_response() {
+        let mock = MockTransport::elm_defaults().on_target("726", "1902FF", "72E 03 7F 19 78\r\r");
+        let mut elm = mock_elm(mock);
+        let r = scan_module(&mut elm, find_module("BCM").unwrap(), false).unwrap();
+        assert!(r.responded(), "a lone response pending proves the module is there");
+        assert!(matches!(r.reads[0].outcome, Outcome::Negative { nrc: 0x78, .. }));
     }
 
     #[test]

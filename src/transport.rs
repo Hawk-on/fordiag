@@ -25,6 +25,19 @@ pub enum TransportError {
     /// The `>` prompt did not arrive in time. `partial` is what did arrive.
     #[error("timeout: no response from the ELM327 (received so far: {partial:?})")]
     Timeout { partial: String },
+    /// An error replayed from a raw log, with exactly the text that was logged.
+    /// `timeout` tells whether the original error was a timeout.
+    #[error("{message}")]
+    Recorded { message: String, timeout: bool },
+}
+
+impl TransportError {
+    pub fn is_timeout(&self) -> bool {
+        matches!(
+            self,
+            TransportError::Timeout { .. } | TransportError::Recorded { timeout: true, .. }
+        )
+    }
 }
 
 pub trait Transport {

@@ -444,6 +444,11 @@ The report contains no VIN or registration number, unless you put them in
 fordiag never asks for the VIN (OBD `09 02`). Read the report before sharing it
 anyway.
 
+The report only includes raw logs whose names in the result files are plain
+`raw-*.jsonl` file names in `fordiag-data/logs/`. If a result file has been edited or
+comes from somewhere else and points anywhere else, that log is left out with a note,
+so a report can never pick up another file from your computer.
+
 ### Sharing
 
 The report is plain Markdown. GitHub, GitLab and most editors render it nicely, and it
