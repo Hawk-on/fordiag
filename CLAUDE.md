@@ -122,6 +122,8 @@ pattern that also matches your own shell command line when stopping it.
 | `src/battery.rs` | Sampling, analysis (rest/crank/charging), persistence, overall assessment |
 | `src/main.rs` | CLI (clap), disclaimer and the `--mock` simulator scenarios |
 | `docs/MANUAL.md` | User manual: keep it up to date when the CLI changes |
+| `.claude/skills/fordiag/SKILL.md` | Claude Code skill for running fordiag with the owner on their PC |
+| `tools/ford_emulator.py` | ELM327-emulator launcher with the made-up `ford_cd4` scenario |
 | `docs/BACKGROUND.md` | Research notes and sources from other owners (unverified) |
 
 Data flow: `main` → `Elm` → `Logged` (raw log) → `SerialTransport`/`MockTransport`/`ReplayTransport`.
@@ -146,7 +148,10 @@ default report output.
 - [x] Ford-like scenario for ELM327-emulator: `tools/ford_emulator.py` (`ford_cd4`,
   made-up data). It found that some ECUs send OBD 03/07/0A answers without the count
   byte; `parse_obd_dtcs` now handles both forms.
-- [ ] Claude Code skill around fordiag (read-only), for use on the owner's own PC.
+- [x] Claude Code skill `.claude/skills/fordiag/SKILL.md` (read-only, physical steps
+  confirmed in chat before running with `-y`; crank test run by the owner). fordiag
+  now refuses to start a measurement without keyboard input unless `-y` is given.
+- [ ] Maybe later: a read-only MCP server exposing the same commands.
 - [ ] Ideas (read-only): software versions per module via `22` (`F188`, `F113`, …,
   unverified), freeze frame (OBD mode `02`, needs an allowlist entry with tests), long
   voltage log with a key press to mark when the 12 V outlet cuts out.

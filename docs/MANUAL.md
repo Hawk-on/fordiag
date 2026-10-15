@@ -34,6 +34,7 @@ This manual covers version 0.1 (phases 1–4: connection, battery, DTCs and repo
 10. [Safety and the allowlist](#10-safety-and-the-allowlist)
 11. [Troubleshooting](#11-troubleshooting)
 12. [Testing without a car](#12-testing-without-a-car)
+13. [Using fordiag with Claude Code](#13-using-fordiag-with-claude-code)
 
 ---
 
@@ -103,7 +104,7 @@ These flags can go before or after the command name.
 | `--mock` | off | Use the built-in simulator instead of cable and car |
 | `--replay <LOG>` | off | Replay a recorded raw log instead of using the cable (see [chapter 12](#12-testing-without-a-car)) |
 | `--data-dir <DIR>` | `fordiag-data` | Where logs and results are stored (relative to the current directory) |
-| `-y`, `--yes` | off | Do not wait for Enter before measurements |
+| `-y`, `--yes` | off | Do not wait for Enter before measurements. Without it, fordiag refuses to start a measurement when there is no keyboard input (e.g. when run by a script or an AI agent), so that `-y` is always a deliberate choice. |
 | `-h`, `--help` | | Show help (includes the disclaimer) |
 | `-V`, `--version` | | Show version |
 
@@ -682,3 +683,23 @@ fordiag --port /dev/pts/3 -y dtc --bus ms
 The emulator does not separate HS and MS, so every module answers on both buses, and
 `ATDP` always reports 500 kbit/s. The data says nothing about any real car. The
 emulator has its own licence (CC BY-NC-SA 4.0); the script only uses it.
+
+---
+
+## 13. Using fordiag with Claude Code
+
+The repository contains a Claude Code skill in `.claude/skills/fordiag/`. If you run
+Claude Code **on your own PC** in the repository directory, with the cable plugged
+in, Claude can run the fordiag commands for you and read the JSON results directly.
+
+The skill keeps the same rules as the tool:
+- It only uses fordiag's read-only commands, and it must not use other tools on the
+  serial port.
+- Before each measurement, it tells you what to do physically and waits for your
+  confirmation before it runs the command with `-y`.
+- You run the crank test yourself in your own terminal, because you have to start
+  the engine at the right moment. Claude then reads the result.
+- It does not interpret Ford-specific DTC meanings from memory.
+
+A cloud session (claude.ai/code) cannot reach your cable. There, run the commands
+yourself and share the output or the report.

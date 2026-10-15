@@ -93,6 +93,12 @@ fordiag --port /dev/pts/3 connect --probe
 For a Ford-like scenario (BCM, ACM, APIM, IPC with made-up DTCs, and MS-CAN setup):
 `python3 tools/ford_emulator.py`. See the manual, chapter 12.
 
+## Using it with Claude Code
+
+`.claude/skills/fordiag/` is a Claude Code skill for running fordiag on your own PC:
+Claude tells you what to do physically, waits for your confirmation, runs the
+read-only commands and reads the results. See the manual, chapter 13.
+
 ## Code overview
 
 * `command.rs`: allowlist (types for AT commands and diagnostic requests) and tests

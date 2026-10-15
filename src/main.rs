@@ -202,7 +202,15 @@ fn wait_enter(cli: &Cli, prompt: &str) -> Result<()> {
     print!("Press Enter when ready … ");
     std::io::stdout().flush()?;
     let mut line = String::new();
-    std::io::stdin().lock().read_line(&mut line)?;
+    // No input at all (stdin closed, e.g. when run by a script or an AI agent):
+    // do not start a measurement the user may not be ready for.
+    if std::io::stdin().lock().read_line(&mut line)? == 0 {
+        println!();
+        anyhow::bail!(
+            "no keyboard input available. Make sure the physical setup above is done, \
+             then run the command again with --yes."
+        );
+    }
     Ok(())
 }
 
