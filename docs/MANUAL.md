@@ -58,14 +58,46 @@ This manual covers version 0.1 (phases 1–4: connection, battery, DTCs and repo
 project's GitHub Releases page and install it with
 `sudo apt install ./fordiag_<version>-1_amd64.deb`. The binary goes to
 `/usr/bin/fordiag`, and this manual to `/usr/share/doc/fordiag/`. Remove it with
-`sudo apt remove fordiag`. Check the download against `SHA256SUMS-linux.txt` with
-`sha256sum -c SHA256SUMS-linux.txt --ignore-missing`.
+`sudo apt remove fordiag`. Verify the download first (see below).
 
 **Windows 10/11 (x64, optional):** unzip `fordiag-<version>-x86_64-windows.zip` and run
 `fordiag.exe` from a terminal. The default port on Windows is `COM3`; find the right
 one in Device Manager under "Ports (COM & LPT)" and pass it with `--port COM5` or
 similar. The `dialout` group does not apply. The emulator test and the Claude Code
 skill assume Linux.
+
+### Verifying a download
+
+Every release is **immutable** once published: its files and its tag can no longer be
+changed or replaced. Each file also comes with a Sigstore signature bundle
+(`<file>.sigstore.json`), made keyless by the release workflow on GitHub Actions.
+A valid signature proves the file was built by `release.yml` in this repository
+from that tag, and has not been changed since.
+
+1. Checksums (catches a broken download):
+
+   ```sh
+   sha256sum -c SHA256SUMS.txt --ignore-missing
+   ```
+
+2. Signature (catches a file that was not built by the release workflow). Install
+   [cosign](https://docs.sigstore.dev/cosign/system_config/installation/), then, with
+   the right version in place of `v0.1.0`:
+
+   ```sh
+   f=fordiag_0.1.0-1_amd64.deb
+   cosign verify-blob "$f" --bundle "$f.sigstore.json" \
+     --certificate-identity "https://github.com/Hawk-on/fordiag/.github/workflows/release.yml@refs/tags/v0.1.0" \
+     --certificate-oidc-issuer https://token.actions.githubusercontent.com
+   ```
+
+   It must print `Verified OK`. Do not install a file that fails. (A release that
+   was re-run by hand under Actions is signed from `@refs/heads/main` instead of
+   `@refs/tags/…`; use that identity for it.)
+
+The signing certificate (repository name, workflow, tag and commit) is recorded in
+Sigstore's public transparency log, Rekor. That is what makes the signature
+verifiable without a key; it contains no data about the car.
 
 ### Building from source
 

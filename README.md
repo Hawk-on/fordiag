@@ -41,6 +41,10 @@ sudo apt install ./fordiag_0.1.0-1_amd64.deb
 sudo usermod -aG dialout $USER     # access to /dev/ttyUSB0; log out and in again
 ```
 
+Releases are immutable and every file is signed with Sigstore: check the download with
+`sha256sum -c SHA256SUMS.txt --ignore-missing` and `cosign verify-blob` as described in
+the [manual](docs/MANUAL.md#verifying-a-download).
+
 The package also works on Ubuntu 22.04 and later and on Debian 12 and later (it only
 needs glibc 2.34). The manual is installed in `/usr/share/doc/fordiag/`.
 
@@ -148,12 +152,18 @@ read-only commands and reads the results. See the manual, chapter 13.
 - **Windows (optional)** (`.github/workflows/windows.yml`): started by hand under
   Actions; tests and builds a Windows x64 zip.
 - **Release** (`.github/workflows/release.yml`): pushing a tag `vX.Y.Z` (matching
-  `Cargo.toml`) builds and publishes a GitHub Release with the `.deb`, a Linux
-  tarball, an optional Windows zip and SHA-256 checksums:
+  `Cargo.toml`) builds the `.deb`, a Linux tarball, an optional Windows zip and
+  `SHA256SUMS.txt`, signs every file keyless with Sigstore (`<file>.sigstore.json`),
+  and publishes them as an **immutable** GitHub Release (draft first, all files
+  attached, then published). How to verify a download: see the manual, chapter 1.
 
   ```sh
-  git tag v0.1.0 && git push origin v0.1.0
+  git tag -a v0.1.0 -m "fordiag v0.1.0" && git push origin v0.1.0
   ```
+
+  One-time setup: enable release immutability under the repository's
+  Settings → General → Releases. A published release can then never be changed;
+  fix a bad release with a new version.
 
 ## License
 

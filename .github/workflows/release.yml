@@ -3,11 +3,23 @@
 #   - a .deb package for Kubuntu / Ubuntu 26.04 (amd64),
 #   - a plain Linux tarball,
 #   - optionally a Windows x64 zip (that job may fail without stopping the release),
-#   - SHA-256 checksums.
+#   - SHA-256 checksums (SHA256SUMS.txt),
+#   - a Sigstore signature bundle (<file>.sigstore.json) for every file above.
 #
-#   git tag v0.1.0 && git push origin v0.1.0
+#   git tag -a v0.1.0 -m "fordiag v0.1.0" && git push origin v0.1.0
 #
 # The tag must match the version in Cargo.toml.
+#
+# Immutable releases: the release is created as a draft, every file is attached,
+# and only then is it published. With "release immutability" enabled in the
+# repository settings, a published release (its files and its tag) can never be
+# changed again. A broken release is fixed with a new version, not by re-uploading.
+#
+# Signatures: the files are signed keyless with Sigstore (cosign) using this
+# workflow's GitHub OIDC identity. There is no key to manage or leak. Note that
+# the signing certificate (repository name, workflow, tag and commit) is recorded
+# in Sigstore's public transparency log (Rekor), even though the repository is
+# private. No car data is involved. See docs/MANUAL.md, "Verifying a download".
 name: Release
 
 on:
@@ -16,11 +28,11 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing tag to (re)build, e.g. v0.1.0"
+        description: "Existing tag whose release is not published yet, e.g. v0.1.0"
         required: true
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -54,33 +66,22 @@ jobs:
           sudo dpkg -i target/debian/fordiag_*.deb
           fordiag check "14 FF FF FF" | grep -q '^REJECTED'
           sudo dpkg -r fordiag
-      - name: Tarball and checksums
+      - name: Tarball
         run: |
           mkdir -p dist "fordiag-$TAG-x86_64-linux"
           cp target/release/fordiag README.md LICENSE docs/MANUAL.md "fordiag-$TAG-x86_64-linux/"
           tar czf "dist/fordiag-$TAG-x86_64-linux.tar.gz" "fordiag-$TAG-x86_64-linux"
           cp target/debian/fordiag_*.deb dist/
-          (cd dist && sha256sum * > SHA256SUMS-linux.txt)
-      - uses: softprops/action-gh-release@v2
+      - uses: actions/upload-artifact@v4
         with:
-          tag_name: ${{ env.TAG }}
-          name: fordiag ${{ env.TAG }}
-          generate_release_notes: true
-          body: |
-            Read-only diagnostic CLI for the Ford S-Max Mk2 via ELM327.
-
-            **Kubuntu / Ubuntu 26.04:** download the `.deb` and install it with
-            `sudo apt install ./fordiag_*.deb`. Add yourself to the `dialout` group to use the cable.
-
-            **Disclaimer:** use at your own risk. Provided "as is", without warranty (see LICENSE).
-            Not affiliated with Ford. Never operate it while driving.
-          files: dist/*
+          name: release-linux
+          path: dist/*
+          if-no-files-found: error
 
   windows:
     name: Windows x64 (optional)
     runs-on: windows-latest
-    needs: linux
-    # Optional: a Windows failure does not stop or undo the Linux release.
+    # Optional: a Windows failure does not stop the Linux release.
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
@@ -90,16 +91,87 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --locked
       - run: cargo build --locked --release
-      - name: Zip and checksum
+      - name: Zip
         shell: pwsh
         run: |
           $name = "fordiag-$env:TAG-x86_64-windows"
           New-Item -ItemType Directory -Force $name, dist | Out-Null
           Copy-Item target\release\fordiag.exe, README.md, LICENSE, docs\MANUAL.md $name\
           Compress-Archive -Path "$name\*" -DestinationPath "dist\$name.zip" -Force
-          $hash = (Get-FileHash "dist\$name.zip" -Algorithm SHA256).Hash.ToLower()
-          "$hash  $name.zip" | Out-File -Encoding ascii dist\SHA256SUMS-windows.txt
-      - uses: softprops/action-gh-release@v2
+      - uses: actions/upload-artifact@v4
         with:
-          tag_name: ${{ env.TAG }}
-          files: dist/*
+          name: release-windows
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Sign and publish
+    runs-on: ubuntu-26.04
+    needs: [linux, windows]
+    # Publish when Linux succeeded, with or without the Windows zip.
+    if: ${{ always() && needs.linux.result == 'success' }}
+    permissions:
+      contents: write # create the release
+      id-token: write # Sigstore keyless signing
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist
+        run: |
+          sha256sum -- * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+      - uses: sigstore/cosign-installer@v3
+      - name: Sign every file (Sigstore, keyless)
+        working-directory: dist
+        run: |
+          for f in *; do
+            cosign sign-blob --yes --bundle "$f.sigstore.json" "$f"
+          done
+      - name: Verify the signatures before publishing
+        working-directory: dist
+        run: |
+          identity="${GITHUB_SERVER_URL}/${GITHUB_WORKFLOW_REF}"
+          for f in *; do
+            case "$f" in *.sigstore.json) continue ;; esac
+            cosign verify-blob "$f" --bundle "$f.sigstore.json" \
+              --certificate-identity "$identity" \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com
+          done
+          ls -l
+      - name: Release notes
+        run: |
+          cat > notes.md <<'EOF'
+          Read-only diagnostic CLI for the Ford S-Max Mk2 via ELM327.
+
+          **Kubuntu / Ubuntu 26.04:** download the `.deb` and install it with
+          `sudo apt install ./fordiag_*.deb`. Add yourself to the `dialout` group to use the cable.
+
+          **Verify the download:** `sha256sum -c SHA256SUMS.txt --ignore-missing`, and check the
+          Sigstore signature of each file with `cosign verify-blob` (see the manual, chapter 1,
+          "Verifying a download").
+
+          **Disclaimer:** use at your own risk. Provided "as is", without warranty (see LICENSE).
+          Not affiliated with Ford. Never operate it while driving.
+          EOF
+      - name: Create the release as a draft, attach all files, then publish
+        run: |
+          # A published release is immutable: never try to change it.
+          if draft="$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null)"; then
+            if [ "$draft" = "true" ]; then
+              echo "Removing an unpublished draft of $TAG from an earlier run"
+              gh release delete "$TAG" --yes
+            else
+              echo "Release $TAG is already published and cannot be changed. Make a new version."
+              exit 1
+            fi
+          fi
+          gh release create "$TAG" dist/* --draft --verify-tag \
+            --title "fordiag $TAG" --notes-file notes.md --generate-notes
+          gh release edit "$TAG" --draft=false

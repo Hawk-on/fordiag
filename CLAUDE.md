@@ -110,7 +110,9 @@ CI/CD (GitHub Actions, `.github/workflows/`): `ci.yml` (fmt, clippy `-D warnings
 tests, `tools/ci_emulator.sh` against the Ford emulator scenario, `.deb` build +
 install check) on `ubuntu-26.04` = Kubuntu 26.04; `windows.yml` (optional, manual);
 `release.yml` on tags `vX.Y.Z` (must match `Cargo.toml`): `.deb`, tarball, optional
-Windows zip, checksums. Keep CI green: run `cargo fmt --check`, `cargo clippy
+Windows zip, `SHA256SUMS.txt`, a keyless Sigstore bundle (`cosign sign-blob`) per file,
+published as an immutable release (draft, attach everything, then publish; never
+change a published release). Keep CI green: run `cargo fmt --check`, `cargo clippy
 --all-targets -- -D warnings`, `cargo test` and `actionlint` before pushing.
 
 The serial layer can be tested against `ELM327-emulator` (`pip install
