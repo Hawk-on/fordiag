@@ -73,6 +73,11 @@ that sends the wrong thing to the car matters far more than anything else.
 - `--port` defaults to `/dev/ttyUSB0` (Linux) and `COM3` (Windows).
 - The CI emulator job installs ELM327-emulator with `GITHUB_RUN_NUMBER` unset; see the
   comment in `ci.yml`.
+- Releases are signed keyless with Sigstore (cosign), not with GitHub artifact
+  attestations (unavailable for a private repository) or a stored key. The entry in
+  the public Rekor log (repository name, workflow, tag, commit) is accepted.
+- Releases are immutable: `release.yml` creates a draft, attaches every file, then
+  publishes. It must never edit the assets of a published release.
 
 ## Severity labels
 
